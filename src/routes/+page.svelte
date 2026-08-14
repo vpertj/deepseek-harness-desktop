@@ -38,6 +38,20 @@
       : null,
   );
 
+  // Boot status copy shown on the welcome page while the kernel comes up.
+  const bootStatusText = $derived.by(() => {
+    switch (s.store.kernel.status.state) {
+      case "starting":
+        return "正在启动内核…";
+      case "running":
+        return "内核已就绪，正在加载界面…";
+      case "error":
+        return "内核启动失败，请查看日志";
+      default:
+        return s.store.logs.length > 0 ? "正在启动…" : "准备启动…";
+    }
+  });
+
   const kernelErrorHint = $derived(
     s.store.kernel.status.state === "error"
       ? (s.store.kernel.status as { state: "error"; message: string }).message
@@ -322,15 +336,22 @@
               {s.store.installing ? "安装中…" : "或在线安装内核"}
             </button>
           {:else}
-            <div class="boot-console" bind:this={bootLogBody}>
-              {#if s.store.logs.length === 0}
-                <div class="boot-empty">启动日志将显示在这里…</div>
-              {:else}
+            <div class="boot">
+              <div class={`boot-ring ${s.store.kernel.status.state === "running" ? "boot-ring-done" : ""}`} aria-hidden="true">
+                <span class="boot-ring-core"></span>
+              </div>
+              <p class="boot-status">{bootStatusText}</p>
+              <div class="boot-dots" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </div>
+            </div>
+            {#if s.store.logs.length > 0}
+              <div class="boot-console" bind:this={bootLogBody}>
                 {#each s.store.logs as log (log.ts + log.line)}
                   <div class={`boot-line boot-${log.stream}`}>{log.line}</div>
                 {/each}
-              {/if}
-            </div>
+              </div>
+            {/if}
             <button class="link" onclick={openSettings}>内核管理</button>
           {/if}
         </div>
@@ -664,10 +685,94 @@
   .env-warn {
     color: #fbbf24;
   }
+  .boot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 0 8px;
+  }
+  .boot-ring {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg, rgba(103, 158, 254, 0), #679efe 85%, rgba(103, 158, 254, 0));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    animation: boot-spin 0.9s linear infinite;
+  }
+  .boot-ring-core {
+    position: absolute;
+    inset: 13px;
+    border-radius: 50%;
+    background: rgba(103, 158, 254, 0.25);
+    animation: boot-breathe 1.6s ease-in-out infinite;
+  }
+  .boot-ring-done {
+    background: conic-gradient(from 0deg, rgba(52, 211, 153, 0), #34d399 85%, rgba(52, 211, 153, 0));
+    animation: none;
+  }
+  .boot-ring-done .boot-ring-core {
+    background: rgba(52, 211, 153, 0.3);
+    animation: none;
+  }
+  @keyframes boot-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes boot-breathe {
+    0%,
+    100% {
+      transform: scale(0.85);
+      opacity: 0.5;
+    }
+    50% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  .boot-status {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+  .boot-dots {
+    display: flex;
+    gap: 7px;
+  }
+  .boot-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: boot-bounce 1.2s ease-in-out infinite;
+  }
+  .boot-dots span:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+  .boot-dots span:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+  @keyframes boot-bounce {
+    0%,
+    80%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.35;
+    }
+    40% {
+      transform: translateY(-4px);
+      opacity: 1;
+    }
+  }
   .boot-console {
     width: 100%;
     max-width: 640px;
-    height: 260px;
+    height: 200px;
     overflow-y: auto;
     background: #0a0a0b;
     border: 1px solid var(--border);
@@ -678,10 +783,6 @@
     font-size: 11.5px;
     line-height: 1.55;
     margin: 6px 0 4px;
-  }
-  .boot-empty {
-    color: var(--text-faint);
-    font-family: inherit;
   }
   .boot-line {
     white-space: pre-wrap;
