@@ -10,6 +10,7 @@
   let toastMsg = $state<string | null>(null);
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
+  let envStatus: api.EnvStatusDto | null = $state(null);
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -76,6 +77,18 @@
 
   async function start() {
     await run("start", async () => {
+      // Auto-install the toolchain if node/pnpm are missing or too old.
+      if (!envStatus?.ready) {
+        toast("检测到环境不完整，正在安装 Node.js / pnpm…");
+        try {
+          envStatus = await api.installEnv();
+          if (!envStatus.ready) {
+            return "环境安装后仍不满足：node=" + (envStatus.node.version ?? "缺失") + " pnpm=" + (envStatus.pnpm.version ?? "缺失") + "（可尝试安装 mise 或 Homebrew 后重试）";
+          }
+        } catch (e) {
+          return String(e);
+        }
+      }
       const err = await s.startKernel();
       if (!err) {
         toast("内核启动中，请稍候…");
@@ -143,6 +156,7 @@
   onMount(() => {
     s.wireEvents();
     s.refreshStatus();
+    api.checkEnv().then((e) => (envStatus = e)).catch(() => {});
     syncTheme();
     // Rust watches ~/.dsh/settings.yaml (300ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
@@ -223,6 +237,16 @@
         <div class="welcome-inner">
           <h1>DeepSeek Harness</h1>
           <p class="lead">本地运行 deepseek-harness 内核 · 从 GitHub 一键更新</p>
+
+          {#if envStatus}
+            <p class={`env-status ${envStatus.ready ? "env-ok" : "env-warn"}`}>
+              {#if envStatus.ready}
+                Node {envStatus.node.version} · pnpm {envStatus.pnpm.version}
+              {:else}
+                需要 Node.js ≥ 22.19 与 pnpm，启动内核时将自动安装（检测到 {envStatus.mise ? "mise" : envStatus.brew ? "Homebrew" : "无安装器"}）
+              {/if}
+            </p>
+          {/if}
 
           {#if !s.store.kernel.kernelDir}
             <button class="btn-hero" onclick={pickDir} disabled={busy !== null}>
@@ -499,6 +523,16 @@
     color: var(--text-dim);
     font-size: 13.5px;
     margin: 0 0 10px;
+  }
+  .env-status {
+    font-size: 12px;
+    margin: 0;
+  }
+  .env-ok {
+    color: rgba(52, 211, 153, 0.85);
+  }
+  .env-warn {
+    color: #fbbf24;
   }
   .btn-hero {
     background: var(--accent);

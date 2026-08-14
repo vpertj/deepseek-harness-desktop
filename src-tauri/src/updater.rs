@@ -27,7 +27,7 @@ pub fn default_kernel_dir() -> PathBuf {
 }
 
 /// Run a command, streaming stdout+stderr lines as `kernel-log` events.
-async fn run_streaming(
+pub(crate) async fn run_streaming(
     app: &AppHandle,
     cwd: &Path,
     path_env: &str,

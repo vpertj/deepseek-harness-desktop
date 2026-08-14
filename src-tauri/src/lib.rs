@@ -1,4 +1,5 @@
 mod config;
+mod envcheck;
 mod kernel;
 mod settings;
 mod theme;
@@ -28,6 +29,8 @@ pub fn run() {
             settings::set_auto_start,
             settings::set_persist_logs,
             theme::get_theme,
+            envcheck::check_env,
+            envcheck::install_env,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

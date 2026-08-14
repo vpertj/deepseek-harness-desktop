@@ -66,3 +66,30 @@ export interface ThemeDto {
 export function getTheme(): Promise<ThemeDto> {
   return invoke("get_theme");
 }
+
+// ---- Environment (node / pnpm detection & auto-install) -------------------
+
+export interface ToolStatusDto {
+  present: boolean;
+  version: string | null;
+  ok: boolean;
+}
+
+export interface EnvStatusDto {
+  node: ToolStatusDto;
+  pnpm: ToolStatusDto;
+  node_path: string | null;
+  pnpm_path: string | null;
+  mise: boolean;
+  brew: boolean;
+  corepack: boolean;
+  ready: boolean;
+}
+
+export function checkEnv(): Promise<EnvStatusDto> {
+  return invoke("check_env");
+}
+
+export function installEnv(): Promise<EnvStatusDto> {
+  return invoke("install_env");
+}
