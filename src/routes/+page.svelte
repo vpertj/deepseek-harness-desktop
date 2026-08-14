@@ -183,8 +183,8 @@
   }
 
   async function pickProfileDir() {
-    const picked = await api.pickKernelDir();
-    if (picked) newProfileDir = picked;
+    const picked = await open({ directory: true, title: "选择内核目录" });
+    if (typeof picked === "string" && picked) newProfileDir = picked;
   }
 
   async function addProfile() {
