@@ -22,6 +22,7 @@
   let appVersion = $state("0.1.0");
   let appUpdate: api.AppUpdateInfo | null = $state(null);
   let appCheckBusy = $state(false);
+  let modalTab = $state<"status" | "kernel" | "profiles" | "plugins" | "prefs" | "about">("status");
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -233,8 +234,24 @@
       const info = await api.appUpdateCheck();
       appUpdate = info;
       appVersion = info.current;
-      if (info.update_available && !silent) {
-        toast(`发现新版本 v${info.latest}`, "ok");
+      if (info.update_available) {
+        if (!silent) toast(`发现新版本 v${info.latest}`, "ok");
+        // System notification so the user sees it even with the window hidden.
+        try {
+          const { isPermissionGranted, requestPermission, sendNotification } = await import(
+            "@tauri-apps/plugin-notification"
+          );
+          let granted = await isPermissionGranted();
+          if (!granted) granted = (await requestPermission()) === "granted";
+          if (granted) {
+            sendNotification({
+              title: "DeepSeek Harness Desktop 有新版本",
+              body: `v${info.latest} 已发布，点击打开下载页。`,
+            });
+          }
+        } catch {
+          // notifications are best-effort
+        }
       }
     } catch {
       if (!silent) toast("检查应用更新失败", "err");
@@ -459,190 +476,207 @@
   <!-- ============ 设置弹窗 ============ -->
   {#if settingsOpen}
     <div class="modal-mask" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="内核管理">
+      <div class="modal modal-wide" role="dialog" aria-modal="true" aria-label="内核管理">
         <h2>内核管理</h2>
 
-        <div class={`modal-status ${port ? "status-on" : ""}`}>
-          {#if port}
-            <span class="status-dot"></span>
-            <span>运行中 · 服务地址 <code>http://127.0.0.1:{port}</code></span>
-          {:else}
-            <span class="status-dot"></span>
-            <span>内核未运行</span>
-          {/if}
-        </div>
+        <div class="modal-body">
+          <nav class="modal-nav" aria-label="内核管理分区">
+            <button class:nav-active={modalTab === "status"} onclick={() => (modalTab = "status")}>
+              <span class="nav-dot" class:nav-dot-on={port !== null}></span>状态
+            </button>
+            <button class:nav-active={modalTab === "kernel"} onclick={() => (modalTab = "kernel")}>内核</button>
+            <button class:nav-active={modalTab === "profiles"} onclick={() => (modalTab = "profiles")}>配置</button>
+            <button class:nav-active={modalTab === "plugins"} onclick={() => (modalTab = "plugins")}>插件</button>
+            <button class:nav-active={modalTab === "prefs"} onclick={() => (modalTab = "prefs")}>偏好</button>
+            <button class:nav-active={modalTab === "about"} onclick={() => (modalTab = "about")}>关于</button>
+          </nav>
 
-        <h3 class="group-title">内核</h3>
+          <section class="modal-pane">
+            {#if modalTab === "status"}
+              <div class={`status-card ${port ? "status-on" : ""}`}>
+                <span class="status-card-dot"></span>
+                <div class="status-card-info">
+                  <p class="status-card-title">
+                    {port ? "内核运行中" : "内核未运行"}
+                  </p>
+                  <p class="status-card-sub">
+                    {#if port}
+                      服务地址 <code>http://127.0.0.1:{port}</code>
+                    {:else}
+                      点击下方「启动内核」开始使用
+                    {/if}
+                  </p>
+                </div>
+              </div>
+              {#if s.store.kernel.status.state === "error"}
+                <div class="error-box">
+                  {(s.store.kernel.status as { message: string }).message}
+                </div>
+              {/if}
+              <div class="field">
+                <span class="field-label">当前配置</span>
+                <p class="hint" style="margin: 0">
+                  {s.store.kernel.kernelDir ?? "未设置"}
+                  {#if s.store.kernel.revision}
+                    <span class="mono"> · {s.store.kernel.revision.slice(0, 7)}</span>
+                  {/if}
+                </p>
+              </div>
+            {:else if modalTab === "kernel"}
+              <div class="field">
+                <label for="kernel-dir">内核目录（deepseek-harness 仓库）</label>
+                <div class="row-inline">
+                  <input id="kernel-dir" type="text" readonly value={s.store.kernel.kernelDir ?? ""} placeholder="尚未设置" />
+                  <button class="btn" onclick={pickDir} disabled={busy !== null}>选择目录</button>
+                </div>
+                <p class="hint">选择一个已 clone 的 deepseek-harness 仓库（需含 package.json 与 pnpm-workspace.yaml）。</p>
+              </div>
 
-        {#if profiles.length > 0}
-          <div class="field">
-            <span class="field-label">配置（多内核）</span>
-            <div class="profile-list">
-              {#each profiles as p (p.name)}
-                <div class={`profile-row ${p.active ? "profile-active" : ""}`}>
-                  <button
-                    class="profile-pick"
-                    onclick={() => (p.active ? null : switchProfile(p.name))}
-                    disabled={busy !== null || p.active}
-                    title={p.active ? "当前使用的配置" : "切换到该配置"}
-                  >
-                    <span class="profile-dot"></span>
-                    <span class="profile-name">{p.name}</span>
-                    <span class="profile-meta">
-                      {p.revision ? p.revision.slice(0, 7) : "未知版本"}
+              <div class="field">
+                <label for="install-btn">在线安装</label>
+                <button id="install-btn" class="btn" onclick={install} disabled={busy !== null || s.store.installing}>
+                  {s.store.installing ? "安装中…" : "克隆并安装内核到应用数据目录"}
+                </button>
+                <p class="hint">自动 git clone + pnpm install + build，无需手动准备目录。</p>
+              </div>
+
+              <div class="field">
+                <label for="check-btn">内核更新</label>
+                <div class="row-inline">
+                  <button id="check-btn" class="btn" onclick={check} disabled={busy !== null || !s.store.kernel.kernelDir || s.store.kernel.status.state !== "stopped"}>
+                    {s.store.checkingUpdate ? "检查中…" : "检查更新"}
+                  </button>
+                  {#if s.store.updateInfo}
+                    <span class="hint">
+                      {#if s.store.updateInfo.update_available}
+                        当前 {s.store.updateInfo.current} → 最新 {s.store.updateInfo.latest}（落后 {s.store.updateInfo.behind}）
+                      {:else}
+                        当前 {s.store.updateInfo.current}，已是最新
+                      {/if}
                     </span>
-                  </button>
-                  <button
-                    class="btn btn-sm"
-                    onclick={() => removeProfile(p.name)}
-                    disabled={busy !== null || p.active}
-                    title={p.active ? "当前配置不可删除" : "删除配置"}
-                  >
-                    删除
+                  {/if}
+                </div>
+              </div>
+
+              {#if s.store.lastUpdateError}
+                <div class="error-box">{s.store.lastUpdateError}</div>
+              {/if}
+            {:else if modalTab === "profiles"}
+              {#if profiles.length > 0}
+                <div class="field">
+                  <span class="field-label">配置列表</span>
+                  <div class="profile-list">
+                    {#each profiles as p (p.name)}
+                      <div class={`profile-row ${p.active ? "profile-active" : ""}`}>
+                        <button
+                          class="profile-pick"
+                          onclick={() => (p.active ? null : switchProfile(p.name))}
+                          disabled={busy !== null || p.active}
+                          title={p.active ? "当前使用的配置" : "切换到该配置"}
+                        >
+                          <span class="profile-dot"></span>
+                          <span class="profile-name">{p.name}</span>
+                          <span class="profile-meta">
+                            {p.revision ? p.revision.slice(0, 7) : "未知版本"}
+                          </span>
+                        </button>
+                        <button
+                          class="btn btn-sm"
+                          onclick={() => removeProfile(p.name)}
+                          disabled={busy !== null || p.active}
+                          title={p.active ? "当前配置不可删除" : "删除配置"}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
+                  <p class="hint">切换配置会停止当前内核，切换后请重新启动。</p>
+                </div>
+              {/if}
+
+              <div class="field">
+                <label for="new-profile-name">添加配置</label>
+                <div class="row-inline">
+                  <input id="new-profile-name" type="text" placeholder="名称（如 开发版 / 稳定版）" bind:value={newProfileName} />
+                  <input type="text" readonly placeholder="选择内核目录" value={newProfileDir} />
+                  <button class="btn" onclick={pickProfileDir} disabled={busy !== null}>选择目录</button>
+                  <button class="btn btn-primary" onclick={addProfile} disabled={busy !== null || !newProfileName.trim() || !newProfileDir.trim()}>
+                    添加
                   </button>
                 </div>
-              {/each}
-            </div>
-            <p class="hint">切换配置会停止当前内核，切换后请重新启动。</p>
-          </div>
-        {/if}
-
-        <div class="field">
-          <label for="new-profile-name">添加配置</label>
-          <div class="row-inline">
-            <input
-              id="new-profile-name"
-              type="text"
-              placeholder="名称（如 开发版 / 稳定版）"
-              bind:value={newProfileName}
-            />
-            <input
-              type="text"
-              readonly
-              placeholder="选择内核目录"
-              value={newProfileDir}
-            />
-            <button class="btn" onclick={pickProfileDir} disabled={busy !== null}>选择目录</button>
-            <button class="btn btn-primary" onclick={addProfile} disabled={busy !== null || !newProfileName.trim() || !newProfileDir.trim()}>
-              添加
-            </button>
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="kernel-dir">内核目录（deepseek-harness 仓库）</label>
-          <div class="row-inline">
-            <input id="kernel-dir" type="text" readonly value={s.store.kernel.kernelDir ?? ""} placeholder="尚未设置" />
-            <button class="btn" onclick={pickDir} disabled={busy !== null}>选择目录</button>
-          </div>
-          <p class="hint">选择一个已 clone 的 deepseek-harness 仓库（需含 package.json 与 pnpm-workspace.yaml）。</p>
-        </div>
-
-        <div class="field">
-          <label for="install-btn">在线安装</label>
-          <button id="install-btn" class="btn" onclick={install} disabled={busy !== null || s.store.installing}>
-            {s.store.installing ? "安装中…" : "克隆并安装内核到应用数据目录"}
-          </button>
-          <p class="hint">自动 git clone + pnpm install + build，无需手动准备目录。</p>
-        </div>
-
-        <div class="field">
-          <label for="check-btn">内核更新</label>
-          <div class="row-inline">
-            <button id="check-btn" class="btn" onclick={check} disabled={busy !== null || !s.store.kernel.kernelDir || s.store.kernel.status.state !== "stopped"}>
-              {s.store.checkingUpdate ? "检查中…" : "检查更新"}
-            </button>
-            {#if s.store.updateInfo}
-              <span class="hint">
-                {#if s.store.updateInfo.update_available}
-                  当前 {s.store.updateInfo.current} → 最新 {s.store.updateInfo.latest}（落后 {s.store.updateInfo.behind}）
+              </div>
+            {:else if modalTab === "plugins"}
+              <div class="field">
+                {#if plugins.length === 0}
+                  <p class="hint" style="margin-top: 0">未安装插件。输入 npm 包名安装（如 dsh-better-sidebar），装完重启内核生效。</p>
                 {:else}
-                  当前 {s.store.updateInfo.current}，已是最新
+                  <div class="plugin-list">
+                    {#each plugins as p (p)}
+                      <div class="plugin-row">
+                        <span class="plugin-name">{p}</span>
+                        <button class="btn btn-sm" onclick={() => removePlugin(p.split("@")[0])} disabled={busy !== null}>
+                          卸载
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
-              </span>
-            {/if}
-          </div>
-        </div>
-
-        {#if s.store.lastUpdateError}
-          <div class="error-box">{s.store.lastUpdateError}</div>
-        {/if}
-
-        <h3 class="group-title">偏好</h3>
-
-        <div class="field">
-          <div class="row-inline">
-            <label class="check">
-              <input
-                type="checkbox"
-                checked={appSettings?.auto_start ?? false}
-                onchange={(e) => {
-                  const v = (e.target as HTMLInputElement).checked;
-                  api.setAutoStart(v).then((st) => (appSettings = st)).catch(() => {});
-                }}
-              />
-              启动时自动运行内核
-            </label>
-            <label class="check">
-              <input
-                type="checkbox"
-                checked={appSettings?.persist_logs ?? false}
-                onchange={(e) => {
-                  const v = (e.target as HTMLInputElement).checked;
-                  api.setPersistLogs(v).then((st) => (appSettings = st)).catch(() => {});
-                }}
-              />
-              内核日志写入文件
-            </label>
-          </div>
-          <p class="hint">日志文件保存在 ~/Library/Logs/deepseek-harness-desktop/kernel.log。</p>
-        </div>
-
-        <h3 class="group-title">插件</h3>
-
-        <div class="field">
-          {#if plugins.length === 0}
-            <p class="hint" style="margin-top: 0">未安装插件。输入 npm 包名安装（如 dsh-better-sidebar），装完重启内核生效。</p>
-          {:else}
-            <div class="plugin-list">
-              {#each plugins as p (p)}
-                <div class="plugin-row">
-                  <span class="plugin-name">{p}</span>
-                  <button class="btn btn-sm" onclick={() => removePlugin(p.split("@")[0])} disabled={busy !== null}>
-                    卸载
+                <div class="row-inline" style="margin-top: 8px">
+                  <input type="text" placeholder="插件包名（如 dsh-better-sidebar）" bind:value={pluginName} />
+                  <input type="text" placeholder="版本（可选）" bind:value={pluginVersion} style="max-width: 100px" />
+                  <button class="btn btn-primary" onclick={installPlugin} disabled={busy !== null || pluginName.trim() === ""}>
+                    安装
                   </button>
                 </div>
-              {/each}
-            </div>
-          {/if}
-          <div class="row-inline" style="margin-top: 8px">
-            <input
-              type="text"
-              placeholder="插件包名（如 dsh-better-sidebar）"
-              bind:value={pluginName}
-            />
-            <input type="text" placeholder="版本（可选，如 0.10.3）" bind:value={pluginVersion} style="max-width: 110px" />
-            <button class="btn btn-primary" onclick={installPlugin} disabled={busy !== null || pluginName.trim() === ""}>
-              安装
-            </button>
-          </div>
-        </div>
-
-        <h3 class="group-title">关于</h3>
-
-        <div class="field">
-          <div class="row-inline">
-            <span class="hint">DeepSeek Harness Desktop v{appVersion}</span>
-            <button class="btn btn-sm" onclick={() => checkAppUpdate(false)} disabled={appCheckBusy}>
-              {appCheckBusy ? "检查中…" : "检查更新"}
-            </button>
-            {#if appUpdate?.update_available}
-              <button class="btn btn-sm btn-primary" onclick={goDownload}>
-                下载 v{appUpdate.latest}
-              </button>
+              </div>
+            {:else if modalTab === "prefs"}
+              <div class="field">
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={appSettings?.auto_start ?? false}
+                    onchange={(e) => {
+                      const v = (e.target as HTMLInputElement).checked;
+                      api.setAutoStart(v).then((st) => (appSettings = st)).catch(() => {});
+                    }}
+                  />
+                  启动时自动运行内核
+                </label>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={appSettings?.persist_logs ?? false}
+                    onchange={(e) => {
+                      const v = (e.target as HTMLInputElement).checked;
+                      api.setPersistLogs(v).then((st) => (appSettings = st)).catch(() => {});
+                    }}
+                  />
+                  内核日志写入文件
+                </label>
+                <p class="hint">日志文件保存在 ~/Library/Logs/deepseek-harness-desktop/kernel.log。</p>
+              </div>
+            {:else}
+              {#if appUpdate?.update_available}
+                <div class="update-banner">
+                  <div>
+                    <strong>发现新版本 v{appUpdate.latest}</strong>
+                    <p>当前版本 v{appUpdate.current}，GitHub Releases 已发布新版本。</p>
+                  </div>
+                  <button class="btn btn-primary" onclick={goDownload}>下载更新</button>
+                </div>
+              {/if}
+              <div class="field">
+                <div class="row-inline">
+                  <span class="hint">DeepSeek Harness Desktop v{appVersion}</span>
+                  <button class="btn btn-sm" onclick={() => checkAppUpdate(false)} disabled={appCheckBusy}>
+                    {appCheckBusy ? "检查中…" : "检查更新"}
+                  </button>
+                </div>
+                <p class="hint">新版本发布在 GitHub Releases，下载 dmg 安装即可。</p>
+              </div>
             {/if}
-          </div>
-          <p class="hint">新版本发布在 GitHub Releases，下载 dmg 安装即可。</p>
+          </section>
         </div>
 
         <div class="modal-foot">
@@ -1061,11 +1095,147 @@
   .modal {
     width: 480px;
     max-width: calc(100vw - 40px);
+    max-height: 82vh;
+    display: flex;
+    flex-direction: column;
     background: var(--surface);
     border: 1px solid var(--border-strong);
     border-radius: 14px;
     padding: 24px 26px;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal-wide {
+    width: 700px;
+  }
+  .modal-body {
+    display: flex;
+    gap: 18px;
+    min-height: 360px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .modal-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 108px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding-right: 14px;
+  }
+  .modal-nav button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s, color 0.12s;
+  }
+  .modal-nav button:hover {
+    background: var(--btn-bg);
+    color: var(--text);
+  }
+  .modal-nav button.nav-active {
+    background: rgba(103, 158, 254, 0.12);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .nav-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #6b7280;
+    flex-shrink: 0;
+  }
+  .nav-dot.nav-dot-on {
+    background: #34d399;
+    box-shadow: 0 0 5px rgba(52, 211, 153, 0.6);
+  }
+  .modal-pane {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .status-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .status-card.status-on {
+    background: rgba(52, 211, 153, 0.08);
+    border-color: rgba(52, 211, 153, 0.3);
+  }
+  .status-card-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #6b7280;
+    flex-shrink: 0;
+  }
+  .status-card.status-on .status-card-dot {
+    background: #34d399;
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+  }
+  .status-card-info {
+    min-width: 0;
+  }
+  .status-card-title {
+    margin: 0;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .status-card-sub {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .status-card.status-on .status-card-title,
+  .status-card.status-on .status-card-sub {
+    color: #34d399;
+  }
+  .status-card code {
+    background: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    border-radius: 5px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+  .update-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: rgba(103, 158, 254, 0.1);
+    border: 1px solid rgba(103, 158, 254, 0.35);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .update-banner strong {
+    font-size: 13.5px;
+    color: var(--accent);
+  }
+  .update-banner p {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--text-dim);
   }
   .modal h2 {
     margin: 0 0 16px;
