@@ -1,5 +1,6 @@
 mod config;
 mod kernel;
+mod updater;
 
 use kernel::KernelManager;
 
@@ -13,6 +14,9 @@ pub fn run() {
             kernel::kernel_set_dir,
             kernel::kernel_start,
             kernel::kernel_stop,
+            updater::update_check,
+            updater::update_apply,
+            updater::kernel_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
