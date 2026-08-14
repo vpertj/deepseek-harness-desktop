@@ -278,12 +278,9 @@
 <main class="app">
   <!-- ============ 顶栏 ============ -->
   <header class="topbar">
-    <div class="status" title={kernelErrorHint ?? (port ? `服务地址 http://127.0.0.1:${port}` : "")}>
+    <div class="status" title={kernelErrorHint ?? ""}>
       <span class={`dot dot-${s.store.kernel.status.state}`}></span>
       <span class="status-text">{stateLabel}</span>
-      {#if port}
-        <span class="status-sub">127.0.0.1:{port}</span>
-      {/if}
     </div>
 
     <div class="actions">
@@ -377,6 +374,9 @@
     <div class="modal-mask" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
       <div class="modal" role="dialog" aria-modal="true" aria-label="内核管理">
         <h2>内核管理</h2>
+        {#if port}
+          <p class="modal-port">运行中 · 服务地址 <code>http://127.0.0.1:{port}</code></p>
+        {/if}
 
         <div class="field">
           <label for="kernel-dir">内核目录（deepseek-harness 仓库）</label>
@@ -591,10 +591,6 @@
   .status-text {
     font-size: 12.5px;
     color: var(--text);
-  }
-  .status-sub {
-    font-size: 11px;
-    color: var(--text-faint);
   }
   .actions {
     display: flex;
@@ -902,8 +898,21 @@
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   }
   .modal h2 {
-    margin: 0 0 18px;
+    margin: 0 0 14px;
     font-size: 16px;
+  }
+  .modal-port {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+  .modal-port code {
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 11.5px;
+    color: var(--text);
   }
   .field {
     margin-bottom: 18px;
