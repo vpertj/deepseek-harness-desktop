@@ -9,9 +9,6 @@
   let toastMsg = $state<string | null>(null);
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
-  let apiKeyConfigured = $state(false);
-  let apiKeyInput = $state("");
-  let showKey = $state(false);
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -142,38 +139,9 @@
     });
   }
 
-  async function saveApiKey() {
-    if (apiKeyInput.trim() === "") return;
-    await run("apikey", async () => {
-      try {
-        await api.apiKeySet(apiKeyInput.trim());
-        apiKeyInput = "";
-        apiKeyConfigured = true;
-        toast("API Key 已保存到钥匙串，重启内核后生效");
-        return null;
-      } catch (e) {
-        return String(e);
-      }
-    });
-  }
-
-  async function clearApiKey() {
-    await run("apikey", async () => {
-      try {
-        await api.apiKeyClear();
-        apiKeyConfigured = false;
-        toast("API Key 已清除");
-        return null;
-      } catch (e) {
-        return String(e);
-      }
-    });
-  }
-
   onMount(() => {
     s.wireEvents();
     s.refreshStatus();
-    api.apiKeyStatus().then((ok) => (apiKeyConfigured = ok)).catch(() => {});
     syncTheme();
     themeTimer = setInterval(syncTheme, 2000);
   });
@@ -287,35 +255,6 @@
     <div class="modal-mask" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
       <div class="modal" role="dialog" aria-modal="true" aria-label="内核管理">
         <h2>内核管理</h2>
-
-        <div class="field">
-          <label for="api-key">模型 · DeepSeek API Key</label>
-          <div class="row-inline">
-            <input
-              id="api-key"
-              type={showKey ? "text" : "password"}
-              bind:value={apiKeyInput}
-              placeholder={apiKeyConfigured ? "已保存（输入新 Key 可替换）" : "sk-..."}
-              autocomplete="off"
-            />
-            <button class="btn" onclick={() => (showKey = !showKey)} title="显示/隐藏">
-              {showKey ? "隐藏" : "显示"}
-            </button>
-            <button class="btn btn-primary" onclick={saveApiKey} disabled={busy !== null || apiKeyInput.trim() === ""}>
-              保存
-            </button>
-            {#if apiKeyConfigured}
-              <button class="btn" onclick={clearApiKey} disabled={busy !== null}>清除</button>
-            {/if}
-          </div>
-          <p class="hint">
-            {#if apiKeyConfigured}
-              已保存到 macOS 钥匙串，启动内核时自动注入，无需在 Web UI 里再配置。
-            {:else}
-              保存到 macOS 钥匙串（不落盘明文），启动内核时自动注入 DEEPSEEK_API_KEY。
-            {/if}
-          </p>
-        </div>
 
         <div class="field">
           <label for="kernel-dir">内核目录（deepseek-harness 仓库）</label>

@@ -398,12 +398,6 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
         .env("PATH", &path_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    // Inject the DeepSeek API key from the Keychain so the web UI's model
-    // route works without manual configuration.
-    if let Some(key) = crate::credentials::get_api_key() {
-        cmd.env("DEEPSEEK_API_KEY", key);
-        eprintln!("[kernel] injected DEEPSEEK_API_KEY from Keychain");
-    }
     #[cfg(unix)]
     cmd.process_group(0);
     cmd.spawn().map_err(|e| format!("启动内核进程失败: {e}"))

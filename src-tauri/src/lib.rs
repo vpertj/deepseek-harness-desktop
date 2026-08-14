@@ -1,5 +1,4 @@
 mod config;
-mod credentials;
 mod kernel;
 mod settings;
 mod theme;
@@ -24,9 +23,6 @@ pub fn run() {
             settings::get_settings,
             settings::set_auto_start,
             settings::set_persist_logs,
-            credentials::api_key_status,
-            credentials::api_key_set,
-            credentials::api_key_clear,
             theme::get_theme,
         ])
         .run(tauri::generate_context!())
