@@ -195,28 +195,23 @@ impl KernelManager {
         if !is_kernel_dir(&dir) {
             return Err(format!("内核目录无效: {}", dir.display()));
         }
-        let (pnpm, path_env) = resolve_toolchain().await?;
         let port = find_free_port()?;
 
         inner.status = KernelStatus::Starting;
         inner.child = None;
 
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(format!("cd {} && exec '{}' dsh web --port {port}", dir.display(), pnpm))
-            .env("PATH", &path_env)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        // Put the whole tree in its own process group so stop() can kill it all.
-        #[cfg(unix)]
-        cmd.process_group(0);
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| {
-                let mut g = self.inner.blocking_lock();
+        eprintln!("[kernel] spawning dsh web on port {port} in {}", dir.display());
+        let spawn_result = spawn_web(&dir, port).await;
+        let mut child = match spawn_result {
+            Ok(c) => c,
+            Err(e) => {
+                let mut g = self.inner.lock().await;
                 g.status = KernelStatus::Stopped;
-                format!("启动内核进程失败: {e}")
-            })?;
+                eprintln!("[kernel] spawn failed: {e}");
+                return Err(e);
+            }
+        };
+        eprintln!("[kernel] spawned pid {:?}", child.id());
 
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
@@ -343,6 +338,21 @@ impl KernelManager {
     }
 }
 
+/// Spawn `pnpm dsh web --port <port>` inside a kernel checkout.
+/// The process tree gets its own process group (so it can be killed wholesale).
+pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::Child, String> {
+    let (pnpm, path_env) = resolve_toolchain().await?;
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("cd {} && exec '{}' dsh web --port {port}", dir.display(), pnpm))
+        .env("PATH", &path_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.spawn().map_err(|e| format!("启动内核进程失败: {e}"))
+}
+
 /// Minimal TCP + HTTP probe: connect and check for an HTTP 200 on GET /.
 async fn tcp_probe(port: u16) -> bool {
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
@@ -385,7 +395,10 @@ pub async fn kernel_start(
     manager: tauri::State<'_, KernelManager>,
     app: AppHandle,
 ) -> Result<u16, String> {
-    manager.start(&app).await
+    eprintln!("[cmd] kernel_start invoked");
+    let r = manager.start(&app).await;
+    eprintln!("[cmd] kernel_start -> {:?}", r);
+    r
 }
 
 #[tauri::command]
@@ -439,5 +452,44 @@ mod tests {
             assert!(rev.is_some(), "应能读到 HEAD revision");
             let _ = dirty;
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_healthcheck_and_kill_web() {
+        // Real kernel checkout next to this repo; skip elsewhere.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
+        if !is_kernel_dir(&dir) {
+            eprintln!("跳过: 未找到内核目录 {}", dir.display());
+            return;
+        }
+        let port = find_free_port().unwrap();
+        let mut child = spawn_web(&dir, port).await.expect("spawn dsh web");
+        let pid = child.id().expect("pid") as i32;
+
+        // Wait for health (up to 60s).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut healthy = false;
+        while std::time::Instant::now() < deadline {
+            if tcp_probe(port).await {
+                healthy = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+        assert!(healthy, "dsh web 未在 60s 内就绪 (port {port})");
+
+        // Kill the whole process group and confirm the port frees up.
+        unsafe {
+            libc::kill(-pid, libc::SIGTERM);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if !tcp_probe(port).await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        assert!(!tcp_probe(port).await, "端口 {port} 在 kill 后仍被占用");
+        let _ = child.kill().await;
     }
 }

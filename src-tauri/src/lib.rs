@@ -8,6 +8,7 @@ use kernel::KernelManager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(KernelManager::default())
         .invoke_handler(tauri::generate_handler![
             kernel::kernel_status,
