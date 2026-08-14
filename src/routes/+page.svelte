@@ -174,7 +174,27 @@
     s.wireEvents();
     s.refreshStatus();
     api.apiKeyStatus().then((ok) => (apiKeyConfigured = ok)).catch(() => {});
+    syncTheme();
+    themeTimer = setInterval(syncTheme, 2000);
   });
+
+  // ---- Theme sync: follow the kernel UI's appearance (dsh settings.yaml) ----
+  let themeTimer: ReturnType<typeof setInterval> | undefined;
+
+  async function syncTheme() {
+    try {
+      const t = await api.getTheme();
+      const pref = t.preference ?? "system";
+      const dark =
+        pref === "dark" ||
+        (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      const root = document.documentElement;
+      root.classList.toggle("theme-light", !dark);
+      root.classList.toggle("theme-dark", dark);
+    } catch {
+      // keep current theme on transient failures
+    }
+  }
 </script>
 
 <svelte:head>
@@ -360,11 +380,46 @@
 </main>
 
 <style>
+  :root {
+    --bg: #151517;
+    --surface: #1b1b1c;
+    --surface-2: #19191a;
+    --surface-3: #131314;
+    --text: #f9fafb;
+    --text-dim: rgba(249, 250, 251, 0.5);
+    --text-faint: rgba(249, 250, 251, 0.45);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.1);
+    --btn-bg: rgba(255, 255, 255, 0.06);
+    --btn-hover: rgba(255, 255, 255, 0.12);
+    --input-bg: rgba(255, 255, 255, 0.04);
+    --accent: #679efe;
+    --accent-hover: #7fadff;
+    --accent-text: #151517;
+  }
+  :global(html.theme-light) {
+    --bg: #f7f7f8;
+    --surface: #ffffff;
+    --surface-2: #f0f0f1;
+    --surface-3: #e9e9ea;
+    --text: #171717;
+    --text-dim: rgba(0, 0, 0, 0.55);
+    --text-faint: rgba(0, 0, 0, 0.45);
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.12);
+    --btn-bg: rgba(0, 0, 0, 0.05);
+    --btn-hover: rgba(0, 0, 0, 0.09);
+    --input-bg: rgba(0, 0, 0, 0.04);
+    --accent: #2f6bff;
+    --accent-hover: #4680ff;
+    --accent-text: #ffffff;
+  }
   :global(body) {
     margin: 0;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-    background: #151517;
-    color: #f9fafb;
+    background: var(--bg);
+    color: var(--text);
+    transition: background 0.2s, color 0.2s;
   }
 
   .app {
@@ -381,9 +436,10 @@
     justify-content: space-between;
     gap: 12px;
     padding: 8px 16px;
-    background: #1b1b1c;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    transition: background 0.2s;
   }
   .status {
     display: flex;
@@ -417,11 +473,11 @@
   }
   .status-text {
     font-size: 12.5px;
-    color: #f9fafb;
+    color: var(--text);
   }
   .status-sub {
     font-size: 11px;
-    color: rgba(249, 250, 251, 0.45);
+    color: var(--text-faint);
   }
   .actions {
     display: flex;
@@ -432,9 +488,9 @@
 
   /* ---- 按钮（幽灵风，对齐内核 UI） ---- */
   .btn {
-    background: rgba(255, 255, 255, 0.06);
-    color: #f9fafb;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--btn-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 5px 12px;
     font-size: 12.5px;
@@ -442,19 +498,19 @@
     transition: background 0.15s;
   }
   .btn:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.12);
+    background: var(--btn-hover);
   }
   .btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
   .btn-primary {
-    background: #679efe;
-    border-color: #679efe;
-    color: #151517;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
   }
   .btn-primary:hover:not(:disabled) {
-    background: #7fadff;
+    background: var(--accent-hover);
   }
   .btn-sm {
     padding: 3px 8px;
@@ -487,15 +543,15 @@
     letter-spacing: -0.01em;
   }
   .lead {
-    color: rgba(249, 250, 251, 0.5);
+    color: var(--text-dim);
     font-size: 13.5px;
     margin: 0 0 10px;
   }
   .btn-hero {
-    background: #679efe;
+    background: var(--accent);
     border: none;
     border-radius: 10px;
-    color: #151517;
+    color: var(--accent-text);
     font-size: 14.5px;
     font-weight: 600;
     padding: 10px 36px;
@@ -503,7 +559,7 @@
     transition: background 0.15s, transform 0.1s;
   }
   .btn-hero:hover:not(:disabled) {
-    background: #7fadff;
+    background: var(--accent-hover);
   }
   .btn-hero:active:not(:disabled) {
     transform: scale(0.98);
@@ -515,7 +571,7 @@
   .link {
     background: none;
     border: none;
-    color: rgba(249, 250, 251, 0.5);
+    color: var(--text-dim);
     font-size: 12.5px;
     cursor: pointer;
     padding: 4px 8px;
@@ -523,8 +579,8 @@
     transition: color 0.15s;
   }
   .link:hover:not(:disabled) {
-    color: #f9fafb;
-    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    background: var(--btn-bg);
   }
   .link:disabled {
     opacity: 0.5;
@@ -562,11 +618,11 @@
     width: 100%;
     height: 100%;
     border: none;
-    background: #151517;
+    background: var(--bg);
   }
 
   .hint {
-    color: rgba(249, 250, 251, 0.45);
+    color: var(--text-faint);
     font-size: 12px;
     margin: 12px 0 0;
   }
@@ -574,8 +630,8 @@
   /* ---- 日志面板 ---- */
   .log-panel {
     height: 220px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    background: #131314;
+    border-top: 1px solid var(--border);
+    background: var(--surface-3);
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
@@ -586,9 +642,9 @@
     align-items: center;
     padding: 5px 10px;
     font-size: 12px;
-    color: rgba(249, 250, 251, 0.45);
-    background: #19191a;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    color: var(--text-faint);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
   }
   .log-actions {
     display: flex;
@@ -605,13 +661,13 @@
   .log-line {
     white-space: pre-wrap;
     word-break: break-all;
-    color: #c3cadb;
+    color: var(--text-dim);
   }
   .log-err {
     color: #fca5a5;
   }
   .log-empty {
-    color: #5c6374;
+    color: var(--text-faint);
   }
 
   /* ---- 弹窗 ---- */
@@ -628,8 +684,8 @@
   .modal {
     width: 480px;
     max-width: calc(100vw - 40px);
-    background: #1b1b1c;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
     border-radius: 14px;
     padding: 24px 26px;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
@@ -644,22 +700,22 @@
   .field label {
     display: block;
     font-size: 12.5px;
-    color: rgba(249, 250, 251, 0.55);
+    color: var(--text-dim);
     margin-bottom: 6px;
   }
   .field input {
     flex: 1;
     min-width: 0;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--input-bg);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    color: #f9fafb;
+    color: var(--text);
     padding: 7px 10px;
     font-size: 12.5px;
   }
   .field input:focus {
     outline: none;
-    border-color: #679efe;
+    border-color: var(--accent);
   }
   .row-inline {
     display: flex;
@@ -689,9 +745,9 @@
     bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
-    background: #1b1b1c;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #f9fafb;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
     padding: 10px 18px;
     border-radius: 10px;
     font-size: 13px;

@@ -2,6 +2,7 @@ mod config;
 mod credentials;
 mod kernel;
 mod settings;
+mod theme;
 mod updater;
 
 use kernel::KernelManager;
@@ -26,6 +27,7 @@ pub fn run() {
             credentials::api_key_status,
             credentials::api_key_set,
             credentials::api_key_clear,
+            theme::get_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

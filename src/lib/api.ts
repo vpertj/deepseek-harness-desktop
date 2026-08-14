@@ -69,3 +69,14 @@ export function apiKeySet(key: string): Promise<void> {
 export function apiKeyClear(): Promise<void> {
   return invoke("api_key_clear");
 }
+
+// ---- Theme (follows the kernel UI's appearance setting) -------------------
+
+export interface ThemeDto {
+  preference: string | null;
+  source: string;
+}
+
+export function getTheme(): Promise<ThemeDto> {
+  return invoke("get_theme");
+}

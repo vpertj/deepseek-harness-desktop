@@ -472,11 +472,20 @@ mod tests {
 
     #[test]
     fn free_port_is_bindable() {
-        let _guard = PORT_LOCK.lock().unwrap();
-        let port = find_free_port().unwrap();
-        assert!(port > 0);
-        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
-        drop(listener);
+        let _guard = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The port can be snatched between release and rebind by another
+        // process (e.g. the running app's kernel), so retry a few times.
+        let mut ok = false;
+        for _ in 0..5 {
+            let port = find_free_port().unwrap();
+            assert!(port > 0);
+            if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", port)) {
+                drop(listener);
+                ok = true;
+                break;
+            }
+        }
+        assert!(ok, "5 次尝试内未能重绑空闲端口");
     }
 
     #[test]
@@ -530,7 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_healthcheck_and_kill_web() {
-        let _guard = PORT_LOCK.lock().unwrap();
+        let _guard = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Real kernel checkout next to this repo; skip elsewhere.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
         if !is_kernel_dir(&dir) {
@@ -570,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_web_with_spaces_in_path() {
-        let _guard = PORT_LOCK.lock().unwrap();
+        let _guard = PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The kernel dir must survive spaces in the path (e.g. "Application
         // Support"). Symlink the real checkout into a space-containing path.
         let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
