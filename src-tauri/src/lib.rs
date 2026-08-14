@@ -1,3 +1,4 @@
+mod app_update;
 mod config;
 mod envcheck;
 mod kernel;
@@ -52,6 +53,7 @@ pub fn run() {
             plugin::plugin_list,
             plugin::plugin_install,
             plugin::plugin_remove,
+            app_update::app_update_check,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

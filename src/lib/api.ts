@@ -69,6 +69,19 @@ export function kernelSetActive(name: string): Promise<ProfileDto[]> {
   return invoke("kernel_set_active", { name });
 }
 
+// ---- App self-update -------------------------------------------------------
+
+export interface AppUpdateInfo {
+  update_available: boolean;
+  current: string;
+  latest: string;
+  url: string;
+}
+
+export function appUpdateCheck(): Promise<AppUpdateInfo> {
+  return invoke("app_update_check");
+}
+
 export function updateCheck(): Promise<UpdateInfo> {
   return invoke("update_check");
 }

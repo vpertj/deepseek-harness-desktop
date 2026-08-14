@@ -27,4 +27,5 @@ libc = "0.2"
 dirs = "6"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-notification = "2.3.3"
+ureq = "3.4.0"
 

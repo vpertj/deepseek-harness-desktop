@@ -18,6 +18,9 @@
   let profiles = $state<api.ProfileDto[]>([]);
   let newProfileName = $state("");
   let newProfileDir = $state("");
+  let appVersion = $state("0.1.0");
+  let appUpdate: api.AppUpdateInfo | null = $state(null);
+  let appCheckBusy = $state(false);
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -223,6 +226,26 @@
     }
   }
 
+  async function checkAppUpdate(silent = true) {
+    appCheckBusy = true;
+    try {
+      const info = await api.appUpdateCheck();
+      appUpdate = info;
+      appVersion = info.current;
+      if (info.update_available && !silent) {
+        toast(`发现新版本 v${info.latest}`, "ok");
+      }
+    } catch {
+      if (!silent) toast("检查应用更新失败", "err");
+    } finally {
+      appCheckBusy = false;
+    }
+  }
+
+  function goDownload() {
+    if (appUpdate?.url) void openUrl(appUpdate.url);
+  }
+
   async function installPlugin() {
     if (pluginName.trim() === "") return;
     await run("plugin", async () => {
@@ -288,6 +311,10 @@
         }
       })();
     }, 400);
+    // Auto-check for app (shell) updates shortly after launch.
+    setTimeout(() => {
+      void checkAppUpdate(false);
+    }, 5000);
     // Rust watches ~/.dsh/settings.yaml (100ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
     themeTimer = setInterval(syncTheme, 2000);
@@ -592,6 +619,23 @@
               安装
             </button>
           </div>
+        </div>
+
+        <h3 class="group-title">关于</h3>
+
+        <div class="field">
+          <div class="row-inline">
+            <span class="hint">DeepSeek Harness Desktop v{appVersion}</span>
+            <button class="btn btn-sm" onclick={() => checkAppUpdate(false)} disabled={appCheckBusy}>
+              {appCheckBusy ? "检查中…" : "检查更新"}
+            </button>
+            {#if appUpdate?.update_available}
+              <button class="btn btn-sm btn-primary" onclick={goDownload}>
+                下载 v{appUpdate.latest}
+              </button>
+            {/if}
+          </div>
+          <p class="hint">新版本发布在 GitHub Releases，下载 dmg 安装即可。</p>
         </div>
 
         <div class="modal-foot">
