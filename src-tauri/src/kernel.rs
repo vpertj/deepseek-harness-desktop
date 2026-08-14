@@ -224,6 +224,21 @@ impl KernelManager {
         }
     }
 
+    /// Synchronous status snapshot (for tray menu updates etc.).
+    pub fn status_blocking(&self) -> KernelInfo {
+        let inner = self.inner.blocking_lock();
+        let (revision, dirty) = match &inner.kernel_dir {
+            Some(dir) if is_kernel_dir(dir) => git_revision(dir),
+            _ => (None, false),
+        };
+        KernelInfo {
+            status: inner.status.clone(),
+            kernel_dir: inner.kernel_dir.clone(),
+            revision,
+            dirty,
+        }
+    }
+
     pub fn kernel_dir(&self) -> Option<PathBuf> {
         self.inner.blocking_lock().kernel_dir.clone()
     }
@@ -322,6 +337,7 @@ impl KernelManager {
             }
             if healthy {
                 sup_shared.lock().await.status = KernelStatus::Running { port };
+                crate::tray::refresh_menu(&app_sup);
                 let _ = app_sup.emit(
                     "kernel-status",
                     serde_json::json!({ "state": "running", "port": port }),
@@ -354,6 +370,7 @@ impl KernelManager {
             let (r1, r2) = tokio::join!(out_task, err_task);
             let _ = (r1, r2);
             done_shared.lock().await.status = KernelStatus::Stopped;
+            crate::tray::refresh_menu(&app_done);
             let _ = app_done.emit(
                 "kernel-status",
                 serde_json::json!({ "state": "stopped", "message": "内核进程已退出" }),

@@ -5,6 +5,7 @@ mod logfile;
 mod plugin;
 mod settings;
 mod theme;
+mod tray;
 mod updater;
 
 use kernel::KernelManager;
@@ -27,6 +28,7 @@ pub fn run() {
             // quit) run before the auto-start kicks in.
             kernel::kill_stale_owned();
             theme::start_watcher(app.handle().clone());
+            let _ = tray::setup_tray(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
