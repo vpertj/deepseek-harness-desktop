@@ -16,13 +16,10 @@
   let plugins = $state<string[]>([]);
   let pluginName = $state("");
   let pluginVersion = $state("");
-  let profiles = $state<api.ProfileDto[]>([]);
-  let newProfileName = $state("");
-  let newProfileDir = $state("");
   let appVersion = $state("0.1.0");
   let appUpdate: api.AppUpdateInfo | null = $state(null);
   let appCheckBusy = $state(false);
-  let modalTab = $state<"status" | "kernel" | "profiles" | "plugins" | "prefs" | "about">("status");
+  let modalTab = $state<"status" | "kernel" | "plugins" | "prefs" | "about">("status");
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -180,52 +177,6 @@
   function openSettings() {
     settingsOpen = true;
     api.pluginList().then((p) => (plugins = p)).catch(() => {});
-    refreshProfiles();
-  }
-
-  async function refreshProfiles() {
-    api.kernelProfiles().then((p) => (profiles = p)).catch(() => {});
-  }
-
-  async function pickProfileDir() {
-    const picked = await open({ directory: true, title: "选择内核目录" });
-    if (typeof picked === "string" && picked) newProfileDir = picked;
-  }
-
-  async function addProfile() {
-    if (newProfileName.trim() === "" || newProfileDir.trim() === "") {
-      toast("请填写配置名称并选择目录", "err");
-      return;
-    }
-    try {
-      profiles = await api.kernelAddProfile(newProfileName.trim(), newProfileDir.trim());
-      newProfileName = "";
-      newProfileDir = "";
-      await s.refreshStatus();
-      toast("配置已添加", "ok");
-    } catch (e) {
-      toast(String(e), "err");
-    }
-  }
-
-  async function removeProfile(name: string) {
-    try {
-      profiles = await api.kernelRemoveProfile(name);
-      await s.refreshStatus();
-      toast("配置已删除", "ok");
-    } catch (e) {
-      toast(String(e), "err");
-    }
-  }
-
-  async function switchProfile(name: string) {
-    try {
-      profiles = await api.kernelSetActive(name);
-      await s.refreshStatus();
-      toast(`已切换到 ${name}，内核已停止，请重新启动`, "ok");
-    } catch (e) {
-      toast(String(e), "err");
-    }
   }
 
   async function checkAppUpdate(silent = true) {
@@ -485,7 +436,6 @@
               <span class="nav-dot" class:nav-dot-on={port !== null}></span>状态
             </button>
             <button class:nav-active={modalTab === "kernel"} onclick={() => (modalTab = "kernel")}>内核</button>
-            <button class:nav-active={modalTab === "profiles"} onclick={() => (modalTab = "profiles")}>配置</button>
             <button class:nav-active={modalTab === "plugins"} onclick={() => (modalTab = "plugins")}>插件</button>
             <button class:nav-active={modalTab === "prefs"} onclick={() => (modalTab = "prefs")}>偏好</button>
             <button class:nav-active={modalTab === "about"} onclick={() => (modalTab = "about")}>关于</button>
@@ -561,51 +511,6 @@
               {#if s.store.lastUpdateError}
                 <div class="error-box">{s.store.lastUpdateError}</div>
               {/if}
-            {:else if modalTab === "profiles"}
-              {#if profiles.length > 0}
-                <div class="field">
-                  <span class="field-label">配置列表</span>
-                  <div class="profile-list">
-                    {#each profiles as p (p.name)}
-                      <div class={`profile-row ${p.active ? "profile-active" : ""}`}>
-                        <button
-                          class="profile-pick"
-                          onclick={() => (p.active ? null : switchProfile(p.name))}
-                          disabled={busy !== null || p.active}
-                          title={p.active ? "当前使用的配置" : "切换到该配置"}
-                        >
-                          <span class="profile-dot"></span>
-                          <span class="profile-name">{p.name}</span>
-                          <span class="profile-meta">
-                            {p.revision ? p.revision.slice(0, 7) : "未知版本"}
-                          </span>
-                        </button>
-                        <button
-                          class="btn btn-sm"
-                          onclick={() => removeProfile(p.name)}
-                          disabled={busy !== null || p.active}
-                          title={p.active ? "当前配置不可删除" : "删除配置"}
-                        >
-                          删除
-                        </button>
-                      </div>
-                    {/each}
-                  </div>
-                  <p class="hint">切换配置会停止当前内核，切换后请重新启动。</p>
-                </div>
-              {/if}
-
-              <div class="field">
-                <label for="new-profile-name">添加配置</label>
-                <div class="row-inline">
-                  <input id="new-profile-name" type="text" placeholder="名称（如 开发版 / 稳定版）" bind:value={newProfileName} />
-                  <input type="text" readonly placeholder="选择内核目录" value={newProfileDir} />
-                  <button class="btn" onclick={pickProfileDir} disabled={busy !== null}>选择目录</button>
-                  <button class="btn btn-primary" onclick={addProfile} disabled={busy !== null || !newProfileName.trim() || !newProfileDir.trim()}>
-                    添加
-                  </button>
-                </div>
-              </div>
             {:else if modalTab === "plugins"}
               <div class="field">
                 {#if plugins.length === 0}
@@ -1286,61 +1191,6 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-  }
-  .profile-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .profile-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .profile-pick {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--btn-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 7px 10px;
-    color: var(--text);
-    font-size: 12.5px;
-    cursor: pointer;
-    text-align: left;
-  }
-  .profile-pick:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-  .profile-pick:disabled {
-    cursor: default;
-    opacity: 1;
-  }
-  .profile-active .profile-pick {
-    border-color: rgba(52, 211, 153, 0.5);
-    background: rgba(52, 211, 153, 0.07);
-  }
-  .profile-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #6b7280;
-    flex-shrink: 0;
-  }
-  .profile-active .profile-dot {
-    background: #34d399;
-    box-shadow: 0 0 5px rgba(52, 211, 153, 0.6);
-  }
-  .profile-name {
-    font-weight: 500;
-  }
-  .profile-meta {
-    margin-left: auto;
-    font-size: 11px;
-    color: var(--text-faint);
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
   }
   .plugin-row {
     display: flex;

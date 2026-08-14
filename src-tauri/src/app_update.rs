@@ -12,54 +12,59 @@ pub struct AppUpdateInfo {
     pub url: String,
 }
 
-/// Compare the installed app version against the latest GitHub release.
-/// Unadvertised limitation: silent auto-install needs a signed binary, so we
-/// surface the update and open the release page instead.
+/// Compare the installed app version against the latest tagged GitHub release.
+/// Uses `git ls-remote` (git protocol) instead of the GitHub REST API so the
+/// check never hits the unauthenticated API rate limit. Silent auto-install
+/// needs a signed binary, so we surface the update and open the release page.
 pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let url = format!("https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest");
-    let url_for_api = url.clone();
-    let body = tokio::time::timeout(
+    let url = format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest");
+
+    let tags = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        tokio::task::spawn_blocking(move || -> Result<String, String> {
-            let mut resp = ureq::get(&url_for_api)
-                .header("User-Agent", "deepseek-harness-desktop")
-                .header("Accept", "application/vnd.github+json")
-                .call()
-                .map_err(|e| format!("无法访问 GitHub Releases: {e}"))?;
-            let text = resp
-                .body_mut()
-                .read_to_string()
-                .map_err(|e| format!("读取响应失败: {e}"))?;
-            Ok(text)
-        }),
+        tokio::process::Command::new("git")
+            .args([
+                "ls-remote",
+                "--tags",
+                &format!("https://github.com/{REPO_OWNER}/{REPO_NAME}.git"),
+                "v*",
+            ])
+            .output(),
     )
     .await
     .map_err(|_| "检查更新超时".to_string())?
-    .map_err(|e| format!("检查更新任务失败: {e}"))??;
+    .map_err(|e| format!("无法访问 GitHub: {e}"))?;
 
-    let json: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("解析响应失败: {e}"))?;
-    let latest = json
-        .get("tag_name")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .trim_start_matches('v')
-        .to_string();
+    if !tags.status.success() {
+        return Err("无法读取 GitHub 版本信息".to_string());
+    }
+    let text = String::from_utf8_lossy(&tags.stdout);
+    // Lines look like: "<sha>\trefs/tags/v0.1.0" (peeled tags end with ^{}).
+    let mut latest = String::new();
+    for line in text.lines() {
+        if line.contains("^{}") {
+            continue;
+        }
+        let Some(tag) = line.split('\t').nth(1) else {
+            continue;
+        };
+        let v = tag
+            .trim_start_matches("refs/tags/")
+            .trim_start_matches('v')
+            .to_string();
+        if !v.is_empty() && version_newer(&v, &latest) {
+            latest = v;
+        }
+    }
     if latest.is_empty() {
         return Err("未找到已发布版本".to_string());
     }
-    let html_url = json
-        .get("html_url")
-        .and_then(|u| u.as_str())
-        .unwrap_or(&url)
-        .to_string();
-    let update_available = version_newer(&latest, &current);
+
     Ok(AppUpdateInfo {
-        update_available,
+        update_available: version_newer(&latest, &current),
         current,
         latest,
-        url: html_url,
+        url,
     })
 }
 
