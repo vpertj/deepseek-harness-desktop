@@ -216,9 +216,11 @@ pub async fn install_kernel(
     app: &AppHandle,
     target_dir: PathBuf,
 ) -> Result<(), String> {
+    eprintln!("[updater] install_kernel -> {}", target_dir.display());
     if target_dir.exists() {
         if is_kernel_dir(&target_dir) {
             // Already a kernel checkout: adopt it.
+            eprintln!("[updater] adopting existing checkout");
             manager.set_kernel_dir(target_dir).await?;
             return Ok(());
         }

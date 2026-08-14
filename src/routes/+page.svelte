@@ -56,7 +56,13 @@
   async function run(label: string, fn: () => Promise<string | null>) {
     if (busy) return;
     busy = label;
+    // Safety net: never let the UI stay stuck if an invoke hangs.
+    const timer = setTimeout(() => {
+      busy = null;
+      toast("操作超时，请重试", "err");
+    }, 10 * 60 * 1000);
     const err = await fn();
+    clearTimeout(timer);
     busy = null;
     if (err) toast(err, "err");
   }
@@ -313,7 +319,18 @@
         {/if}
 
         <div class="modal-foot">
-          <button class="btn btn-primary" onclick={() => (settingsOpen = false)}>完成</button>
+          <button class="btn" onclick={() => (settingsOpen = false)}>关闭</button>
+          <button
+            class="btn btn-primary"
+            onclick={async () => {
+              await start();
+              if (s.store.kernel.status.state !== "starting" && s.store.kernel.status.state !== "running") return;
+              settingsOpen = false;
+            }}
+            disabled={busy !== null || !s.store.kernel.kernelDir}
+          >
+            {s.store.kernel.status.state === "running" ? "内核运行中" : "启动内核"}
+          </button>
         </div>
       </div>
     </div>

@@ -61,13 +61,16 @@ pub async fn resolve_toolchain() -> Result<(String, String), String> {
     let home = std::env::var("HOME").unwrap_or_default();
 
     // 1. Ask the login shell first (covers manually-installed pnpm).
+    //    Timeout: a hung login shell must never block the start flow.
     let mut found: Option<String> = None;
     let mut shell_path = String::new();
-    let out = Command::new("sh")
-        .args(["-lc", "command -v pnpm; echo ---; printf '%s' \"$PATH\""])
-        .output()
-        .await
-        .map_err(|e| format!("无法执行 shell 探测工具链: {e}"))?;
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        Command::new("sh").args(["-lc", "command -v pnpm; echo ---; printf '%s' \"$PATH\""]).output(),
+    )
+    .await
+    .map_err(|_| "shell 探测超时")?
+    .map_err(|e| format!("无法执行 shell 探测工具链: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let mut parts = text.split("---");
     let pnpm_in_shell = parts.next().unwrap_or("").trim().to_string();
@@ -171,9 +174,15 @@ struct KernelInner {
 
 impl Default for KernelManager {
     fn default() -> Self {
+        let settings = crate::config::Settings::load();
+        eprintln!(
+            "[kernel] KernelManager::default: kernel_dir = {:?} (settings path: {})",
+            settings.kernel_dir,
+            crate::config::Settings::config_path().display()
+        );
         KernelManager {
             inner: Arc::new(Mutex::new(KernelInner {
-                kernel_dir: crate::config::Settings::load().kernel_dir,
+                kernel_dir: settings.kernel_dir,
                 status: KernelStatus::Stopped,
                 child: None,
             })),
