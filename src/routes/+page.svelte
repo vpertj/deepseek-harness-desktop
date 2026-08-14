@@ -578,6 +578,9 @@
                     {appCheckBusy ? "检查中…" : "检查更新"}
                   </button>
                 </div>
+                <button class="link link-sm" onclick={() => openUrl("https://github.com/vpertj/deepseek-harness-desktop/releases")}>
+                  GitHub Releases ›
+                </button>
                 <p class="hint">新版本发布在 GitHub Releases，下载 dmg 安装即可。</p>
               </div>
             {/if}
@@ -897,6 +900,10 @@
   .link:hover:not(:disabled) {
     color: var(--text);
     background: var(--btn-bg);
+  }
+  .link-sm {
+    font-size: 12px;
+    padding: 3px 6px;
   }
   .link:disabled {
     opacity: 0.5;
