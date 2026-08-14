@@ -10,19 +10,17 @@
   let toastMsg = $state<string | null>(null);
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
-  let bootLogBody: HTMLDivElement | undefined = $state();
   let envStatus: api.EnvStatusDto | null = $state(null);
   let appSettings: api.SettingsDto | null = $state(null);
   let plugins = $state<string[]>([]);
   let pluginName = $state("");
   let pluginVersion = $state("");
 
-  // Auto-scroll the log panels to the newest line.
+  // Auto-scroll the log panel to the newest line.
   $effect(() => {
     s.store.logs.length;
     tick().then(() => {
       if (logBody) logBody.scrollTop = logBody.scrollHeight;
-      if (bootLogBody) bootLogBody.scrollTop = bootLogBody.scrollHeight;
     });
   });
 
@@ -345,13 +343,6 @@
                 <span></span><span></span><span></span>
               </div>
             </div>
-            {#if s.store.logs.length > 0}
-              <div class="boot-console" bind:this={bootLogBody}>
-                {#each s.store.logs as log (log.ts + log.line)}
-                  <div class={`boot-line boot-${log.stream}`}>{log.line}</div>
-                {/each}
-              </div>
-            {/if}
             <button class="link" onclick={openSettings}>内核管理</button>
           {/if}
         </div>
@@ -766,29 +757,6 @@
       transform: translateY(-4px);
       opacity: 1;
     }
-  }
-  .boot-console {
-    width: 100%;
-    max-width: 640px;
-    height: 200px;
-    overflow-y: auto;
-    background: #0a0a0b;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 12px;
-    text-align: left;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 11.5px;
-    line-height: 1.55;
-    margin: 6px 0 4px;
-  }
-  .boot-line {
-    white-space: pre-wrap;
-    word-break: break-all;
-    color: #c3cadb;
-  }
-  .boot-err {
-    color: #fca5a5;
   }
   .btn-hero {
     background: var(--accent);
