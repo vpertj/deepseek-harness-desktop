@@ -91,7 +91,7 @@
   async function check() {
     await run("check", async () => {
       const err = await s.checkUpdate();
-      if (!err && s.store.updateInfo?.updateAvailable) {
+      if (!err && s.store.updateInfo?.update_available) {
         toast(`发现新版本 ${s.store.updateInfo.current} → ${s.store.updateInfo.latest}（落后 ${s.store.updateInfo.behind} 个提交）`);
       } else if (!err) {
         toast("已是最新版本");
@@ -193,7 +193,7 @@
     <div class="error-banner">{kernelErrorHint}</div>
   {/if}
 
-  {#if s.store.updateInfo?.updateAvailable && s.store.kernel.status.state === "stopped"}
+  {#if s.store.updateInfo?.update_available && s.store.kernel.status.state === "stopped"}
     <div class="update-banner">
       <span>
         内核有更新：{s.store.updateInfo.current} → {s.store.updateInfo.latest}（落后 {s.store.updateInfo.behind} 个提交）
@@ -304,7 +304,7 @@
             </button>
             {#if s.store.updateInfo}
               <span class="hint">
-                {#if s.store.updateInfo.updateAvailable}
+                {#if s.store.updateInfo.update_available}
                   当前 {s.store.updateInfo.current} → 最新 {s.store.updateInfo.latest}（落后 {s.store.updateInfo.behind}）
                 {:else}
                   当前 {s.store.updateInfo.current}，已是最新

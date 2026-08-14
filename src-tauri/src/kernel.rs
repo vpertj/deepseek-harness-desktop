@@ -276,6 +276,7 @@ impl KernelManager {
         let err_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                eprintln!("[kernel:stderr] {line}");
                 let _ = app_err.emit("kernel-log", serde_json::json!({ "stream": "err", "line": line }));
             }
         });

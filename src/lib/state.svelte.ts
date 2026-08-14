@@ -44,7 +44,7 @@ export async function refreshStatus() {
   try {
     const s = await api.kernelStatus();
     store.kernel.status = s.status;
-    store.kernel.kernelDir = s.kernelDir;
+    store.kernel.kernelDir = s.kernel_dir;
     store.kernel.revision = s.revision;
     store.kernel.dirty = s.dirty;
   } catch (e) {
@@ -74,7 +74,7 @@ export async function setDir(dir: string): Promise<string | null> {
   try {
     const s = await api.kernelSetDir(dir);
     store.kernel.status = s.status;
-    store.kernel.kernelDir = s.kernelDir;
+    store.kernel.kernelDir = s.kernel_dir;
     store.kernel.revision = s.revision;
     store.kernel.dirty = s.dirty;
     return null;
@@ -116,6 +116,9 @@ export async function installKernel(): Promise<string | null> {
   store.lastUpdateError = null;
   try {
     await api.kernelInstall();
+    // Kernel dir was set server-side — refresh UI state so the
+    // welcome card switches to the "启动内核" branch.
+    await refreshStatus();
     return null;
   } catch (e) {
     store.lastUpdateError = String(e);
@@ -159,7 +162,7 @@ export async function wireEvents() {
           current: (payload.current as string) ?? null,
           latest: (payload.latest as string) ?? null,
           behind: Number(payload.behind ?? 0),
-          updateAvailable: payload.phase === "update_available",
+          update_available: payload.phase === "update_available",
           dirty: false,
           error: null,
         };

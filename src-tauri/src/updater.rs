@@ -218,14 +218,15 @@ pub async fn install_kernel(
 ) -> Result<(), String> {
     eprintln!("[updater] install_kernel -> {}", target_dir.display());
     if target_dir.exists() {
+        eprintln!("[updater] target exists, is_kernel_dir = {}", is_kernel_dir(&target_dir));
         if is_kernel_dir(&target_dir) {
-            // Already a kernel checkout: adopt it.
             eprintln!("[updater] adopting existing checkout");
             manager.set_kernel_dir(target_dir).await?;
             return Ok(());
         }
         return Err(format!("目标目录已存在且不是内核仓库: {}", target_dir.display()));
     }
+    eprintln!("[updater] target missing, cloning");
     if let Some(parent) = target_dir.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
     }

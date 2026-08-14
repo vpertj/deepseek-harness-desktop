@@ -6,13 +6,15 @@ export type KernelState =
   | "running"
   | "error";
 
+// NOTE: tauri command RETURN values keep Rust field names (snake_case).
+// Only invoke ARGUMENTS are auto-converted to camelCase.
 export interface KernelStatus {
   status:
     | { state: "stopped" }
     | { state: "starting" }
     | { state: "running"; port: number }
     | { state: "error"; message: string };
-  kernelDir: string | null;
+  kernel_dir: string | null;
   revision: string | null;
   dirty: boolean;
 }
@@ -21,7 +23,7 @@ export interface UpdateInfo {
   current: string | null;
   latest: string | null;
   behind: number;
-  updateAvailable: boolean;
+  update_available: boolean;
   dirty: boolean;
   error: string | null;
 }
