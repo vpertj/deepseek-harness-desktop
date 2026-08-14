@@ -402,6 +402,7 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
             pnpm
         ))
         .env("PATH", &path_env)
+        .env("DSH_DESKTOP_OWNED", "1")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     #[cfg(unix)]
@@ -460,6 +461,29 @@ pub async fn kernel_start(
 #[tauri::command]
 pub async fn kernel_stop(manager: tauri::State<'_, KernelManager>) -> Result<(), String> {
     manager.stop().await
+}
+
+/// Kill dsh web processes owned by this app that survived a previous run
+/// (crashed/force-quit leaves them orphaned; each relaunch would otherwise
+/// accumulate another kernel process). The env marker `DSH_DESKTOP_OWNED`
+/// distinguishes our kernels (both the pnpm wrapper and the node dsh web)
+/// from manually started ones.
+pub fn kill_stale_owned() {
+    let Ok(out) = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ps axo pid=,command= -E | grep DSH_DESKTOP_OWNED | grep -v grep | awk '{print $1}'")
+        .output()
+    else {
+        return;
+    };
+    let pids = String::from_utf8_lossy(&out.stdout);
+    for pid in pids.split_whitespace() {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid)
+            .output();
+        eprintln!("[kernel] killed stale kernel pid {pid}");
+    }
 }
 
 #[cfg(test)]

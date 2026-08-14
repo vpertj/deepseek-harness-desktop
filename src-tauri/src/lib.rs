@@ -14,10 +14,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init())
         .manage(KernelManager::default())
         .setup(|app| {
+            eprintln!("[setup] begin");
+            // Clean up kernel processes orphaned by a previous (crash/force
+            // quit) run before the auto-start kicks in.
+            kernel::kill_stale_owned();
             theme::start_watcher(app.handle().clone());
+            eprintln!("[setup] done");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -38,6 +42,13 @@ pub fn run() {
             plugin::plugin_install,
             plugin::plugin_remove,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Stop the kernel we spawned (all DSH_DESKTOP_OWNED processes)
+                // so quitting the app doesn't leave orphans behind.
+                kernel::kill_stale_owned();
+            }
+        });
 }
