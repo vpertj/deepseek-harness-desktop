@@ -15,6 +15,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(KernelManager::default())
+        .on_window_event(|_window, event| {
+            // Single-window app: closing the window means quitting. Kill the
+            // kernel we spawned so no orphaned dsh web processes survive.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                kernel::kill_stale_owned();
+            }
+        })
         .setup(|app| {
             eprintln!("[setup] begin");
             // Clean up kernel processes orphaned by a previous (crash/force
@@ -46,6 +53,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                eprintln!("[app] ExitRequested -> killing owned kernels");
                 // Stop the kernel we spawned (all DSH_DESKTOP_OWNED processes)
                 // so quitting the app doesn't leave orphans behind.
                 kernel::kill_stale_owned();

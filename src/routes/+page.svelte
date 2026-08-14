@@ -10,20 +10,20 @@
   let toastMsg = $state<string | null>(null);
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
+  let bootLogBody: HTMLDivElement | undefined = $state();
   let envStatus: api.EnvStatusDto | null = $state(null);
   let appSettings: api.SettingsDto | null = $state(null);
   let plugins = $state<string[]>([]);
   let pluginName = $state("");
   let pluginVersion = $state("");
 
-  // Auto-scroll the log panel to the newest line.
+  // Auto-scroll the log panels to the newest line.
   $effect(() => {
     s.store.logs.length;
-    if (logBody) {
-      tick().then(() => {
-        if (logBody) logBody.scrollTop = logBody.scrollHeight;
-      });
-    }
+    tick().then(() => {
+      if (logBody) logBody.scrollTop = logBody.scrollHeight;
+      if (bootLogBody) bootLogBody.scrollTop = bootLogBody.scrollHeight;
+    });
   });
 
   const iframeUrl = $derived(
@@ -322,9 +322,15 @@
               {s.store.installing ? "安装中…" : "或在线安装内核"}
             </button>
           {:else}
-            <button class="btn-hero" onclick={start} disabled={busy !== null}>
-              {s.store.kernel.status.state === "starting" ? "启动中…" : "启动内核"}
-            </button>
+            <div class="boot-console" bind:this={bootLogBody}>
+              {#if s.store.logs.length === 0}
+                <div class="boot-empty">启动日志将显示在这里…</div>
+              {:else}
+                {#each s.store.logs as log (log.ts + log.line)}
+                  <div class={`boot-line boot-${log.stream}`}>{log.line}</div>
+                {/each}
+              {/if}
+            </div>
             <button class="link" onclick={openSettings}>内核管理</button>
           {/if}
         </div>
@@ -657,6 +663,33 @@
   }
   .env-warn {
     color: #fbbf24;
+  }
+  .boot-console {
+    width: 100%;
+    max-width: 640px;
+    height: 260px;
+    overflow-y: auto;
+    background: #0a0a0b;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    text-align: left;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    margin: 6px 0 4px;
+  }
+  .boot-empty {
+    color: var(--text-faint);
+    font-family: inherit;
+  }
+  .boot-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #c3cadb;
+  }
+  .boot-err {
+    color: #fca5a5;
   }
   .btn-hero {
     background: var(--accent);
