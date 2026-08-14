@@ -236,9 +236,9 @@
         // non-fatal
       }
     }, 4000);
-    // Rust watches ~/.dsh/settings.yaml (300ms) and pushes theme-changed;
+    // Rust watches ~/.dsh/settings.yaml (100ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
-    themeTimer = setInterval(syncTheme, 30000);
+    themeTimer = setInterval(syncTheme, 2000);
     const un = listen("theme-changed", (e) => {
       const pref = (e.payload as { preference?: string | null }).preference ?? "system";
       applyTheme(pref);
@@ -547,7 +547,6 @@
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
-    transition: background 0.2s, color 0.2s;
   }
 
   .app {
@@ -567,7 +566,6 @@
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    transition: background 0.2s;
   }
   .status {
     display: flex;

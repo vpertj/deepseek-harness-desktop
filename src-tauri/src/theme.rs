@@ -75,33 +75,26 @@ pub fn get_theme() -> ThemeDto {
 
 /// Watch `~/.dsh/settings.yaml` for changes and push a `theme-changed` event
 /// with the new preference, so the shell follows the kernel UI's appearance
-/// with no perceptible delay. Polls mtime every 300ms (cheap stat, no RPC).
+/// with no perceptible delay. Polls every 100ms and compares the parsed
+/// preference (not just mtime) so theme flips apply as close to instantly as
+/// the file write allows.
 pub fn start_watcher(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let path = dsh_settings_path();
-        let mut last_mtime = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok();
         let mut last_pref = std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| parse_preference(&raw));
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            let mtime = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
-            if mtime != last_mtime {
-                last_mtime = mtime;
-                let pref = std::fs::read_to_string(&path)
-                    .ok()
-                    .and_then(|raw| parse_preference(&raw));
-                if pref != last_pref {
-                    last_pref = pref.clone();
-                    let _ = app.emit("theme-changed", ThemeDto {
-                        preference: pref,
-                        source: path.display().to_string(),
-                    });
-                }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let pref = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| parse_preference(&raw));
+            if pref != last_pref {
+                last_pref = pref.clone();
+                let _ = app.emit("theme-changed", ThemeDto {
+                    preference: pref,
+                    source: path.display().to_string(),
+                });
             }
         }
     });
