@@ -11,6 +11,7 @@
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
   let envStatus: api.EnvStatusDto | null = $state(null);
+  let appSettings: api.SettingsDto | null = $state(null);
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -157,11 +158,27 @@
     s.wireEvents();
     s.refreshStatus();
     api.checkEnv().then((e) => (envStatus = e)).catch(() => {});
+    api.getSettings().then((st) => (appSettings = st)).catch(() => {});
     syncTheme();
     // Auto-check for kernel updates shortly after launch (needs kernel dir).
     setTimeout(() => {
       if (s.store.kernel.kernelDir) void s.checkUpdate();
     }, 3000);
+    // Auto-start the kernel if configured (setting default: on).
+    setTimeout(async () => {
+      try {
+        const st = await api.getSettings();
+        if (
+          st.auto_start &&
+          s.store.kernel.kernelDir &&
+          s.store.kernel.status.state === "stopped"
+        ) {
+          await s.startKernel();
+        }
+      } catch {
+        // non-fatal
+      }
+    }, 4000);
     // Rust watches ~/.dsh/settings.yaml (300ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
     themeTimer = setInterval(syncTheme, 30000);
@@ -336,6 +353,35 @@
         {#if s.store.lastUpdateError}
           <div class="error-box">{s.store.lastUpdateError}</div>
         {/if}
+
+        <div class="field">
+          <label>偏好</label>
+          <div class="row-inline">
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={appSettings?.auto_start ?? false}
+                onchange={(e) => {
+                  const v = (e.target as HTMLInputElement).checked;
+                  api.setAutoStart(v).then((st) => (appSettings = st)).catch(() => {});
+                }}
+              />
+              启动时自动运行内核
+            </label>
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={appSettings?.persist_logs ?? false}
+                onchange={(e) => {
+                  const v = (e.target as HTMLInputElement).checked;
+                  api.setPersistLogs(v).then((st) => (appSettings = st)).catch(() => {});
+                }}
+              />
+              内核日志写入文件
+            </label>
+          </div>
+          <p class="hint">日志文件保存在 ~/Library/Logs/deepseek-harness-desktop/kernel.log。</p>
+        </div>
 
         <div class="modal-foot">
           <button class="btn" onclick={() => (settingsOpen = false)}>关闭</button>
@@ -712,6 +758,18 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+    margin: 0;
+  }
+  .check input {
+    accent-color: var(--accent);
   }
   .error-box {
     background: #3a1618;

@@ -93,3 +93,23 @@ export function checkEnv(): Promise<EnvStatusDto> {
 export function installEnv(): Promise<EnvStatusDto> {
   return invoke("install_env");
 }
+
+// ---- App settings ----------------------------------------------------------
+
+export interface SettingsDto {
+  kernel_dir: string | null;
+  auto_start: boolean;
+  persist_logs: boolean;
+}
+
+export function getSettings(): Promise<SettingsDto> {
+  return invoke("get_settings");
+}
+
+export function setAutoStart(autoStart: boolean): Promise<SettingsDto> {
+  return invoke("set_auto_start", { autoStart });
+}
+
+export function setPersistLogs(persistLogs: boolean): Promise<SettingsDto> {
+  return invoke("set_persist_logs", { persistLogs });
+}

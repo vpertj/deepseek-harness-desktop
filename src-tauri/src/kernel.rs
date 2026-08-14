@@ -270,6 +270,7 @@ impl KernelManager {
         let out_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                crate::logfile::persist("out", &line);
                 let _ = app_log.emit("kernel-log", serde_json::json!({ "stream": "out", "line": line }));
             }
         });
@@ -277,6 +278,7 @@ impl KernelManager {
             let mut lines = BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 eprintln!("[kernel:stderr] {line}");
+                crate::logfile::persist("err", &line);
                 let _ = app_err.emit("kernel-log", serde_json::json!({ "stream": "err", "line": line }));
             }
         });

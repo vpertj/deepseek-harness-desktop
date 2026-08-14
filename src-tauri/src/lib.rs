@@ -1,6 +1,7 @@
 mod config;
 mod envcheck;
 mod kernel;
+mod logfile;
 mod settings;
 mod theme;
 mod updater;
