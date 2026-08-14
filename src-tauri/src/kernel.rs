@@ -51,10 +51,18 @@ pub fn is_kernel_dir(dir: &Path) -> bool {
         && dir.join("apps/cli/src/bin.ts").is_file()
 }
 
-/// Resolve pnpm and a usable PATH from the user's login shell.
+/// Resolve pnpm and a usable PATH for spawned processes.
 /// Returns (pnpm_abs_path, full_path_env).
+///
+/// GUI apps (Finder/launchd) get a minimal PATH, and login shells do NOT read
+/// ~/.zshrc (where mise/nvm/fnm activate), so we probe common locations
+/// directly instead of trusting `sh -lc`.
 pub async fn resolve_toolchain() -> Result<(String, String), String> {
-    // `-lc` picks up the login shell profile where pnpm/nvm usually live.
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // 1. Ask the login shell first (covers manually-installed pnpm).
+    let mut found: Option<String> = None;
+    let mut shell_path = String::new();
     let out = Command::new("sh")
         .args(["-lc", "command -v pnpm; echo ---; printf '%s' \"$PATH\""])
         .output()
@@ -62,30 +70,58 @@ pub async fn resolve_toolchain() -> Result<(String, String), String> {
         .map_err(|e| format!("无法执行 shell 探测工具链: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let mut parts = text.split("---");
-    let pnpm = parts.next().unwrap_or("").trim().to_string();
-    let shell_path = parts.next().unwrap_or("").trim().to_string();
-    if pnpm.is_empty() {
-        return Err(
-            "未找到 pnpm。请先安装 Node.js 与 pnpm（corepack enable pnpm 或 npm i -g pnpm）。"
-                .to_string(),
-        );
+    let pnpm_in_shell = parts.next().unwrap_or("").trim().to_string();
+    shell_path = parts.next().unwrap_or("").trim().to_string();
+    if !pnpm_in_shell.is_empty() {
+        found = Some(pnpm_in_shell);
+    }
+
+    // 2. Probe well-known locations (covers mise/nvm/homebrew without a login shell).
+    if found.is_none() {
+        for candidate in [
+            format!("{home}/.local/share/mise/shims/pnpm"),
+            format!("{home}/.local/share/pnpm/pnpm"),
+            format!("{home}/.npm-global/bin/pnpm"),
+            "/opt/homebrew/bin/pnpm".to_string(),
+            "/usr/local/bin/pnpm".to_string(),
+        ] {
+            if std::path::Path::new(&candidate).is_file() {
+                found = Some(candidate);
+                break;
+            }
+        }
+    }
+
+    let pnpm = found.ok_or_else(|| {
+        "未找到 pnpm。请先安装 Node.js 与 pnpm（corepack enable pnpm 或 npm i -g pnpm）。".to_string()
+    })?;
+
+    // Build a PATH that includes every dir that might hold node/pnpm.
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(parent) = std::path::Path::new(&pnpm).parent() {
+        dirs.push(parent.display().to_string());
+    }
+    for extra in [
+        format!("{home}/.local/share/mise/shims"),
+        format!("{home}/.local/share/pnpm"),
+        format!("{home}/.npm-global/bin"),
+        format!("{home}/.nvm/versions/node"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ] {
+        if !dirs.contains(&extra) {
+            dirs.push(extra);
+        }
     }
     let mut full_path = shell_path;
+    for d in dirs {
+        if !full_path.contains(&d) {
+            full_path = format!("{full_path}:{d}");
+        }
+    }
     if let Ok(cur) = std::env::var("PATH") {
         if !full_path.contains(&cur) {
             full_path = format!("{full_path}:{cur}");
-        }
-    }
-    // Common fallback dirs for node/pnpm binaries.
-    let home = std::env::var("HOME").unwrap_or_default();
-    for extra in [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        &format!("{home}/.local/share/pnpm"),
-        &format!("{home}/.npm-global/bin"),
-    ] {
-        if !full_path.contains(extra) {
-            full_path = format!("{full_path}:{extra}");
         }
     }
     Ok((pnpm, full_path))
@@ -436,10 +472,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn toolchain_resolves_on_dev_machine() {
-        let (pnpm, path) = resolve_toolchain().await.unwrap();
-        assert!(pnpm.contains("pnpm"), "pnpm 路径: {pnpm}");
-        assert!(!path.is_empty());
+    async fn toolchain_resolves_in_gui_and_shell_env() {
+        // GUI-like: minimal PATH → must find pnpm via direct probing (mise shims).
+        let old = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        let gui = resolve_toolchain().await.expect("GUI 环境也应能找到 pnpm");
+        std::env::set_var("PATH", &old);
+        assert!(
+            gui.1.contains("mise/shims") || gui.1.contains("local/share"),
+            "GUI PATH 应含用户工具链目录: {}",
+            gui.1
+        );
+        assert!(gui.0.contains("pnpm"), "pnpm 路径: {}", gui.0);
+
+        // Normal shell env still works.
+        let normal = resolve_toolchain().await.expect("shell 环境能找到 pnpm");
+        assert!(!normal.0.is_empty());
+        assert!(!normal.1.is_empty());
     }
 
     #[test]

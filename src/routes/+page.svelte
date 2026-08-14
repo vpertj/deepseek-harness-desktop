@@ -5,7 +5,6 @@
   import * as api from "$lib/api";
 
   let settingsOpen = $state(false);
-  let showLogs = $state(false);
   let busy: string | null = $state(null);
   let toastMsg = $state<string | null>(null);
   let toastKind = $state<"ok" | "err">("ok");
@@ -65,7 +64,12 @@
   async function start() {
     await run("start", async () => {
       const err = await s.startKernel();
-      if (!err) toast("内核启动中，请稍候…");
+      if (!err) {
+        toast("内核启动中，请稍候…");
+      } else {
+        s.appendLog("err", `启动失败: ${err}`);
+        s.store.logPanelOpen = true;
+      }
       return err;
     });
   }
@@ -115,7 +119,10 @@
   async function install() {
     await run("install", async () => {
       const err = await s.installKernel();
-      if (!err) toast("内核安装完成，可以启动");
+      if (!err) {
+        toast("内核安装完成，可以启动");
+        settingsOpen = false;
+      }
       return err;
     });
   }
@@ -170,8 +177,8 @@
       </button>
 
       <button class="btn" onclick={() => (settingsOpen = true)}>设置</button>
-      <button class="btn btn-icon" onclick={() => (showLogs = !showLogs)} title="内核日志">
-        {showLogs ? "隐藏日志" : "日志"}
+      <button class="btn btn-icon" onclick={() => (s.store.logPanelOpen = !s.store.logPanelOpen)} title="内核日志">
+        {s.store.logPanelOpen ? "隐藏日志" : "日志"}
       </button>
     </div>
   </header>
@@ -239,13 +246,13 @@
   </section>
 
   <!-- ============ 日志面板 ============ -->
-  {#if showLogs}
+  {#if s.store.logPanelOpen}
     <section class="log-panel" aria-label="内核日志">
       <div class="log-head">
         <span>内核日志</span>
         <span class="log-actions">
           <button class="btn btn-sm" onclick={() => s.clearLogs()}>清空</button>
-          <button class="btn btn-sm" onclick={() => (showLogs = false)}>收起</button>
+          <button class="btn btn-sm" onclick={() => (s.store.logPanelOpen = false)}>收起</button>
         </span>
       </div>
       <div class="log-body" bind:this={logBody}>
