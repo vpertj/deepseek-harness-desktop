@@ -227,7 +227,8 @@ fn hdiutil_detach(mount: &str) -> Result<(), String> {
 }
 
 /// Build the install script: wait for the old app to exit, swap in the new
-/// .app, strip quarantine, unmount the dmg, then relaunch.
+/// .app, strip quarantine, register it with LaunchServices, then relaunch
+/// (with retries — right after a swap LaunchServices may not know the app yet).
 fn install_script(mounted_app: &std::path::Path, mount: &str, version: &str) -> String {
     let app_path = "/Applications/deepseek-harness-desktop.app";
     let mounted = mounted_app.display().to_string();
@@ -235,11 +236,21 @@ fn install_script(mounted_app: &std::path::Path, mount: &str, version: &str) -> 
         r#"#!/bin/sh
 # auto-update to v{version}
 while pgrep -f "Contents/MacOS/deepseek-harness-desktop" > /dev/null 2>&1; do sleep 1; done
+sleep 1
 rm -rf "{app_path}"
 ditto "{mounted}" "{app_path}"
 xattr -dr com.apple.quarantine "{app_path}" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "{app_path}" > /dev/null 2>&1 || true
 hdiutil detach "{mount}" > /dev/null 2>&1 || true
-open "{app_path}"
+sleep 2
+i=0
+while [ $i -lt 5 ]; do
+  if open "{app_path}" 2>/dev/null; then
+    exit 0
+  fi
+  i=$((i + 1))
+  sleep 2
+done
 "#
     )
 }
