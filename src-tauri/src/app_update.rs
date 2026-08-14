@@ -119,7 +119,7 @@ pub async fn app_download_update(app: AppHandle) -> Result<(), String> {
 
     // 2. Mount the dmg and locate the .app inside.
     let _ = app.emit("app-update-progress", serde_json::json!({ "phase": "mounting", "percent": 100 }));
-    let mount = mount_dmg(&dmg_path)?;
+    let mount = mount_dmg(&dmg_path, &info.latest)?;
     let mounted_app = std::path::Path::new(&mount).join("deepseek-harness-desktop.app");
     if !mounted_app.is_dir() {
         let _ = hdiutil_detach(&mount);
@@ -178,24 +178,24 @@ async fn download_with_progress(
     Ok(())
 }
 
-/// Attach the dmg (no Finder window) and return its mount point.
-fn mount_dmg(dmg: &std::path::Path) -> Result<String, String> {
+/// Attach the dmg at a fixed, predictable mount point (`-mountpoint` avoids
+/// parsing hdiutil's space-bearing volume names) and return it.
+fn mount_dmg(dmg: &std::path::Path, version: &str) -> Result<String, String> {
+    let mount = format!("/Volumes/dsh-update-{version}");
     let out = std::process::Command::new("hdiutil")
-        .args(["attach", "-nobrowse", "-readonly"])
+        .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
+        .arg(&mount)
         .arg(dmg)
         .output()
         .map_err(|e| format!("挂载 dmg 失败: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
-    // Output ends with a line like: "/Volumes/deepseek-harness-desktop ..."
-    for line in text.lines().rev() {
-        let trimmed = line.trim();
-        if let Some(path) = trimmed.split_whitespace().next() {
-            if path.starts_with("/Volumes/") {
-                return Ok(path.to_string());
-            }
-        }
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("挂载 dmg 失败: {}", err.trim()));
     }
-    Err(format!("无法定位挂载点: {text}"))
+    if !std::path::Path::new(&mount).is_dir() {
+        return Err(format!("挂载点未生成: {mount}"));
+    }
+    Ok(mount)
 }
 
 fn hdiutil_detach(mount: &str) -> Result<(), String> {
