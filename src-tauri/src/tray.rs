@@ -100,7 +100,8 @@ pub fn refresh_menu(app: &AppHandle) {
     };
     let running = app
         .try_state::<KernelManager>()
-        .map(|m| matches!(m.status_blocking().status, KernelStatus::Running { .. }))
+        .and_then(|m| m.status_snapshot())
+        .map(|s| matches!(s.status, KernelStatus::Running { .. }))
         .unwrap_or(false);
     use tauri::menu::MenuItemKind;
     if let Some(MenuItemKind::MenuItem(start)) = menu.get(MENU_START) {

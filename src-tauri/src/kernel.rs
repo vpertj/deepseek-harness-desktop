@@ -239,8 +239,25 @@ impl KernelManager {
         }
     }
 
+    /// Non-blocking status snapshot. Safe to call from inside the async
+    /// runtime (tray menu refresh): never blocks, never panics — returns
+    /// `None` if the lock is momentarily held.
+    pub fn status_snapshot(&self) -> Option<KernelInfo> {
+        let inner = self.inner.try_lock().ok()?;
+        let (revision, dirty) = match &inner.kernel_dir {
+            Some(dir) if is_kernel_dir(dir) => git_revision(dir),
+            _ => (None, false),
+        };
+        Some(KernelInfo {
+            status: inner.status.clone(),
+            kernel_dir: inner.kernel_dir.clone(),
+            revision,
+            dirty,
+        })
+    }
+
     pub fn kernel_dir(&self) -> Option<PathBuf> {
-        self.inner.blocking_lock().kernel_dir.clone()
+        self.inner.try_lock().ok()?.kernel_dir.clone()
     }
 
     pub async fn set_kernel_dir(&self, dir: PathBuf) -> Result<KernelInfo, String> {

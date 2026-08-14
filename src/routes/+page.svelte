@@ -279,10 +279,14 @@
   }
 
   onMount(() => {
-    s.wireEvents();
-    s.refreshStatus();
-    api.checkEnv().then((e) => (envStatus = e)).catch(() => {});
-    api.getSettings().then((st) => (appSettings = st)).catch(() => {});
+    try {
+      s.wireEvents();
+    } catch (e) {
+      console.error("wireEvents failed", e);
+    }
+    s.refreshStatus().catch((e) => console.error("refreshStatus failed", e));
+    api.checkEnv().then((e) => (envStatus = e)).catch((e) => console.error("checkEnv failed", e));
+    api.getSettings().then((st) => (appSettings = st)).catch((e) => console.error("getSettings failed", e));
     syncTheme();
     // Auto-check for kernel updates shortly after launch (needs kernel dir),
     // then re-check periodically while the app runs.
@@ -298,7 +302,9 @@
     setTimeout(() => {
       void (async () => {
         try {
-          await Promise.all([s.refreshStatus(), api.getSettings(), api.checkEnv()]);
+          // Never let one failing probe block the auto-start: allSettled waits
+          // for every call, then we re-read settings as the source of truth.
+          await Promise.allSettled([s.refreshStatus(), api.getSettings(), api.checkEnv()]);
           const st = await api.getSettings();
           if (
             st.auto_start &&
@@ -307,8 +313,8 @@
           ) {
             await s.startKernel();
           }
-        } catch {
-          // non-fatal
+        } catch (e) {
+          console.error("auto-start failed", e);
         }
       })();
     }, 400);
