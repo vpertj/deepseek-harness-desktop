@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import * as s from "$lib/state.svelte";
   import * as api from "$lib/api";
@@ -143,22 +144,35 @@
     s.wireEvents();
     s.refreshStatus();
     syncTheme();
-    themeTimer = setInterval(syncTheme, 2000);
+    // Rust watches ~/.dsh/settings.yaml (300ms) and pushes theme-changed;
+    // keep a slow fallback poll in case the event is missed.
+    themeTimer = setInterval(syncTheme, 30000);
+    const un = listen("theme-changed", (e) => {
+      const pref = (e.payload as { preference?: string | null }).preference ?? "system";
+      applyTheme(pref);
+    });
+    return () => {
+      clearInterval(themeTimer);
+      un.then((fn) => fn()).catch(() => {});
+    };
   });
 
   // ---- Theme sync: follow the kernel UI's appearance (dsh settings.yaml) ----
   let themeTimer: ReturnType<typeof setInterval> | undefined;
 
+  function applyTheme(pref: string) {
+    const dark =
+      pref === "dark" ||
+      (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    const root = document.documentElement;
+    root.classList.toggle("theme-light", !dark);
+    root.classList.toggle("theme-dark", dark);
+  }
+
   async function syncTheme() {
     try {
       const t = await api.getTheme();
-      const pref = t.preference ?? "system";
-      const dark =
-        pref === "dark" ||
-        (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
-      const root = document.documentElement;
-      root.classList.toggle("theme-light", !dark);
-      root.classList.toggle("theme-dark", dark);
+      applyTheme(t.preference ?? "system");
     } catch {
       // keep current theme on transient failures
     }

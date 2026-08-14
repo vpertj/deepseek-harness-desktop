@@ -12,6 +12,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(KernelManager::default())
+        .setup(|app| {
+            theme::start_watcher(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             kernel::kernel_status,
             kernel::kernel_set_dir,

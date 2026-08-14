@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
+use tauri::Emitter;
 
 /// Read the theme preference dsh persists in its host user-settings file
 /// (`$DSH_HOME/settings.yaml`, default `~/.dsh/settings.yaml`), so the shell
@@ -70,6 +71,40 @@ pub fn get_theme() -> ThemeDto {
         preference,
         source: path.display().to_string(),
     }
+}
+
+/// Watch `~/.dsh/settings.yaml` for changes and push a `theme-changed` event
+/// with the new preference, so the shell follows the kernel UI's appearance
+/// with no perceptible delay. Polls mtime every 300ms (cheap stat, no RPC).
+pub fn start_watcher(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let path = dsh_settings_path();
+        let mut last_mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok();
+        let mut last_pref = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| parse_preference(&raw));
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let mtime = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok();
+            if mtime != last_mtime {
+                last_mtime = mtime;
+                let pref = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|raw| parse_preference(&raw));
+                if pref != last_pref {
+                    last_pref = pref.clone();
+                    let _ = app.emit("theme-changed", ThemeDto {
+                        preference: pref,
+                        source: path.display().to_string(),
+                    });
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
