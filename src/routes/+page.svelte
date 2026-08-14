@@ -29,6 +29,12 @@
       : null,
   );
 
+  const port = $derived(
+    s.store.kernel.status.state === "running"
+      ? (s.store.kernel.status as { state: "running"; port: number }).port
+      : null,
+  );
+
   const kernelErrorHint = $derived(
     s.store.kernel.status.state === "error"
       ? (s.store.kernel.status as { state: "error"; message: string }).message
@@ -178,31 +184,16 @@
 <main class="app">
   <!-- ============ 顶栏 ============ -->
   <header class="topbar">
-    <div class="actions">
-      <span class={`pill pill-${s.store.kernel.status.state}`} title={kernelErrorHint}>
-        <span class="dot"></span>
-        {stateLabel}
-      </span>
-
-      {#if s.store.kernel.status.state === "running"}
-        <button class="btn" onclick={stop} disabled={busy !== null}>停止</button>
-      {:else if s.store.kernel.status.state === "starting"}
-        <button class="btn" disabled>启动中…</button>
-      {:else}
-        <button class="btn btn-primary" onclick={start} disabled={busy !== null || !s.store.kernel.kernelDir}>
-          启动内核
-        </button>
+    <div class="status" title={kernelErrorHint ?? (port ? `服务地址 http://127.0.0.1:${port}` : "")}>
+      <span class={`dot dot-${s.store.kernel.status.state}`}></span>
+      <span class="status-text">{stateLabel}</span>
+      {#if port}
+        <span class="status-sub">127.0.0.1:{port}</span>
       {/if}
+    </div>
 
-      <button class="btn" onclick={check} disabled={busy !== null || !s.store.kernel.kernelDir || s.store.kernel.status.state !== "stopped"}
-        title="从 GitHub 检查内核更新">
-        {s.store.checkingUpdate ? "检查中…" : "检查更新"}
-      </button>
-
+    <div class="actions">
       <button class="btn" onclick={() => (settingsOpen = true)}>内核</button>
-      <button class="btn btn-icon" onclick={() => (s.store.logPanelOpen = !s.store.logPanelOpen)} title="内核日志">
-        {s.store.logPanelOpen ? "隐藏日志" : "日志"}
-      </button>
     </div>
   </header>
 
@@ -227,42 +218,23 @@
       <iframe title="DeepSeek Harness" src={iframeUrl} class="frame" allow="clipboard-write"></iframe>
     {:else}
       <div class="welcome">
-        <div class="welcome-card">
-          <h1>DeepSeek Harness Desktop</h1>
-          <p class="lead">
-            本地运行 deepseek-harness 内核的桌面壳。内核从
-            <code>github.com/deepseek-ai/deepseek-harness</code>
-            获取，可随时一键更新。
-          </p>
+        <div class="welcome-inner">
+          <h1>DeepSeek Harness</h1>
+          <p class="lead">本地运行 deepseek-harness 内核 · 从 GitHub 一键更新</p>
 
           {#if !s.store.kernel.kernelDir}
-            <div class="welcome-actions">
-              <button class="btn btn-primary" onclick={pickDir} disabled={busy !== null}>
-                选择已有内核目录
-              </button>
-              <button class="btn" onclick={install} disabled={busy !== null || s.store.installing}>
-                {s.store.installing ? "安装中…（克隆 + 构建，需要几分钟）" : "在线安装内核"}
-              </button>
-            </div>
-            <p class="hint">需要本机已安装 Node.js ≥ 22 与 pnpm（corepack enable pnpm）。</p>
+            <button class="btn-hero" onclick={pickDir} disabled={busy !== null}>
+              选择内核目录
+            </button>
+            <button class="link" onclick={install} disabled={busy !== null || s.store.installing}>
+              {s.store.installing ? "安装中…" : "或在线安装内核"}
+            </button>
           {:else}
-            <div class="welcome-actions">
-              <button class="btn btn-primary" onclick={start} disabled={busy !== null}>
-                启动内核
-              </button>
-            </div>
-            <p class="hint">启动后在此处加载 DeepSeek Harness Web UI。</p>
+            <button class="btn-hero" onclick={start} disabled={busy !== null}>
+              {s.store.kernel.status.state === "starting" ? "启动中…" : "启动内核"}
+            </button>
+            <button class="link" onclick={() => (settingsOpen = true)}>内核管理</button>
           {/if}
-
-          <div class="guide">
-            <h3>使用步骤</h3>
-            <ol>
-              <li>配置内核：选择已 clone 的仓库目录，或在线安装</li>
-              <li>启动内核（自动分配端口）</li>
-              <li>在界面中 设置 → Models 填入 DeepSeek API Key，选择工作区后开始对话</li>
-              <li>内核更新：点顶栏「检查更新」，有新版时一键拉取 + 重建</li>
-            </ol>
-          </div>
         </div>
       </div>
     {/if}
@@ -391,8 +363,8 @@
   :global(body) {
     margin: 0;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0f1115;
-    color: #e6e8ee;
+    background: #151517;
+    color: #f9fafb;
   }
 
   .app {
@@ -406,12 +378,50 @@
   .topbar {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     gap: 12px;
-    padding: 8px 14px;
-    background: #161a22;
-    border-bottom: 1px solid #262c3a;
+    padding: 8px 16px;
+    background: #1b1b1c;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     flex-shrink: 0;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: default;
+    user-select: none;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #6b7280;
+  }
+  .dot-running {
+    background: #34d399;
+    box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+  }
+  .dot-starting {
+    background: #fbbf24;
+    animation: pulse 1s infinite;
+  }
+  .dot-error {
+    background: #f87171;
+    box-shadow: 0 0 6px rgba(248, 113, 113, 0.6);
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.3;
+    }
+  }
+  .status-text {
+    font-size: 12.5px;
+    color: #f9fafb;
+  }
+  .status-sub {
+    font-size: 11px;
+    color: rgba(249, 250, 251, 0.45);
   }
   .actions {
     display: flex;
@@ -420,31 +430,31 @@
     flex-shrink: 0;
   }
 
-  /* ---- 按钮 ---- */
+  /* ---- 按钮（幽灵风，对齐内核 UI） ---- */
   .btn {
-    background: #212734;
-    color: #dfe3ec;
-    border: 1px solid #333c4e;
-    border-radius: 7px;
-    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #f9fafb;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 5px 12px;
     font-size: 12.5px;
     cursor: pointer;
     transition: background 0.15s;
   }
   .btn:hover:not(:disabled) {
-    background: #2a3242;
+    background: rgba(255, 255, 255, 0.12);
   }
   .btn:disabled {
-    opacity: 0.45;
+    opacity: 0.4;
     cursor: not-allowed;
   }
   .btn-primary {
-    background: #2f6bff;
-    border-color: #2f6bff;
-    color: #fff;
+    background: #679efe;
+    border-color: #679efe;
+    color: #151517;
   }
   .btn-primary:hover:not(:disabled) {
-    background: #4680ff;
+    background: #7fadff;
   }
   .btn-sm {
     padding: 3px 8px;
@@ -454,38 +464,71 @@
     min-width: 52px;
   }
 
-  /* ---- 状态灯 ---- */
-  .pill {
-    display: inline-flex;
+  /* ---- 欢迎页 ---- */
+  .welcome {
+    height: 100%;
+    display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid #333c4e;
-    background: #1b2029;
+    justify-content: center;
+    padding: 24px;
   }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #6b7280;
+  .welcome-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    text-align: center;
+    max-width: 480px;
   }
-  .pill-running .dot {
-    background: #34d399;
-    box-shadow: 0 0 6px #34d39988;
+  .welcome-inner h1 {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
-  .pill-starting .dot {
-    background: #fbbf24;
-    animation: pulse 1s infinite;
+  .lead {
+    color: rgba(249, 250, 251, 0.5);
+    font-size: 13.5px;
+    margin: 0 0 10px;
   }
-  .pill-error .dot {
-    background: #f87171;
+  .btn-hero {
+    background: #679efe;
+    border: none;
+    border-radius: 10px;
+    color: #151517;
+    font-size: 14.5px;
+    font-weight: 600;
+    padding: 10px 36px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
   }
-  @keyframes pulse {
-    50% {
-      opacity: 0.3;
-    }
+  .btn-hero:hover:not(:disabled) {
+    background: #7fadff;
+  }
+  .btn-hero:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .btn-hero:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .link {
+    background: none;
+    border: none;
+    color: rgba(249, 250, 251, 0.5);
+    font-size: 12.5px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: color 0.15s;
+  }
+  .link:hover:not(:disabled) {
+    color: #f9fafb;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .link:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   /* ---- 横幅 ---- */
@@ -499,14 +542,14 @@
     gap: 10px;
   }
   .error-banner {
-    background: #3a1618;
+    background: rgba(248, 113, 113, 0.12);
     color: #fca5a5;
-    border-bottom: 1px solid #5c2326;
+    border-bottom: 1px solid rgba(248, 113, 113, 0.2);
   }
   .update-banner {
-    background: #1c2a12;
-    color: #bef264;
-    border-bottom: 1px solid #33471f;
+    background: rgba(52, 211, 153, 0.1);
+    color: #86efac;
+    border-bottom: 1px solid rgba(52, 211, 153, 0.2);
   }
 
   /* ---- 内容区 ---- */
@@ -519,73 +562,20 @@
     width: 100%;
     height: 100%;
     border: none;
-    background: #0f1115;
+    background: #151517;
   }
 
-  .welcome {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    overflow: auto;
-  }
-  .welcome-card {
-    max-width: 560px;
-    background: #161a22;
-    border: 1px solid #262c3a;
-    border-radius: 14px;
-    padding: 32px 36px;
-  }
-  .welcome-card h1 {
-    margin: 0 0 8px;
-    font-size: 20px;
-  }
-  .lead {
-    color: #aab2c4;
-    font-size: 13.5px;
-    line-height: 1.6;
-    margin: 0 0 20px;
-  }
-  .lead code {
-    background: #222836;
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 12px;
-  }
-  .welcome-actions {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
   .hint {
-    color: #7c8498;
+    color: rgba(249, 250, 251, 0.45);
     font-size: 12px;
     margin: 12px 0 0;
-  }
-  .guide {
-    margin-top: 24px;
-    border-top: 1px solid #262c3a;
-    padding-top: 16px;
-  }
-  .guide h3 {
-    margin: 0 0 8px;
-    font-size: 13px;
-    color: #9aa3b8;
-  }
-  .guide ol {
-    margin: 0;
-    padding-left: 18px;
-    font-size: 12.5px;
-    color: #aab2c4;
-    line-height: 1.9;
   }
 
   /* ---- 日志面板 ---- */
   .log-panel {
     height: 220px;
-    border-top: 1px solid #262c3a;
-    background: #0d1016;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: #131314;
     display: flex;
     flex-direction: column;
     flex-shrink: 0;
@@ -596,9 +586,9 @@
     align-items: center;
     padding: 5px 10px;
     font-size: 12px;
-    color: #8b93a7;
-    background: #141821;
-    border-bottom: 1px solid #262c3a;
+    color: rgba(249, 250, 251, 0.45);
+    background: #19191a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
   .log-actions {
     display: flex;
@@ -638,8 +628,8 @@
   .modal {
     width: 480px;
     max-width: calc(100vw - 40px);
-    background: #161a22;
-    border: 1px solid #2c3345;
+    background: #1b1b1c;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 14px;
     padding: 24px 26px;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
@@ -654,18 +644,22 @@
   .field label {
     display: block;
     font-size: 12.5px;
-    color: #9aa3b8;
+    color: rgba(249, 250, 251, 0.55);
     margin-bottom: 6px;
   }
   .field input {
     flex: 1;
     min-width: 0;
-    background: #0f1219;
-    border: 1px solid #2c3345;
-    border-radius: 7px;
-    color: #dfe3ec;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #f9fafb;
     padding: 7px 10px;
     font-size: 12.5px;
+  }
+  .field input:focus {
+    outline: none;
+    border-color: #679efe;
   }
   .row-inline {
     display: flex;
@@ -695,9 +689,9 @@
     bottom: 24px;
     left: 50%;
     transform: translateX(-50%);
-    background: #1d2432;
-    border: 1px solid #333c4e;
-    color: #e6e8ee;
+    background: #1b1b1c;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #f9fafb;
     padding: 10px 18px;
     border-radius: 10px;
     font-size: 13px;
@@ -705,8 +699,8 @@
     z-index: 100;
   }
   .toast-err {
-    background: #3a1618;
-    border-color: #5c2326;
+    background: rgba(248, 113, 113, 0.15);
+    border-color: rgba(248, 113, 113, 0.3);
     color: #fca5a5;
   }
 </style>
