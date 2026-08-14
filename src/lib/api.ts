@@ -113,3 +113,17 @@ export function setAutoStart(autoStart: boolean): Promise<SettingsDto> {
 export function setPersistLogs(persistLogs: boolean): Promise<SettingsDto> {
   return invoke("set_persist_logs", { persistLogs });
 }
+
+// ---- dsh plugins ------------------------------------------------------------
+
+export function pluginList(): Promise<string[]> {
+  return invoke("plugin_list");
+}
+
+export function pluginInstall(name: string, version?: string): Promise<void> {
+  return invoke("plugin_install", { name, version: version ?? null });
+}
+
+export function pluginRemove(name: string): Promise<void> {
+  return invoke("plugin_remove", { name });
+}

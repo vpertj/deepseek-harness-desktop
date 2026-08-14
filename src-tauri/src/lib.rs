@@ -2,6 +2,7 @@ mod config;
 mod envcheck;
 mod kernel;
 mod logfile;
+mod plugin;
 mod settings;
 mod theme;
 mod updater;
@@ -33,6 +34,9 @@ pub fn run() {
             theme::get_theme,
             envcheck::check_env,
             envcheck::install_env,
+            plugin::plugin_list,
+            plugin::plugin_install,
+            plugin::plugin_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

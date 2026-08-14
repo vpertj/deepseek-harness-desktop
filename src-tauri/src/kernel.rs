@@ -205,6 +205,10 @@ impl KernelManager {
         }
     }
 
+    pub fn kernel_dir(&self) -> Option<PathBuf> {
+        self.inner.blocking_lock().kernel_dir.clone()
+    }
+
     pub async fn set_kernel_dir(&self, dir: PathBuf) -> Result<KernelInfo, String> {
         if !dir.is_dir() {
             return Err(format!("目录不存在: {}", dir.display()));

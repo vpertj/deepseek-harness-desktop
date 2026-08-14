@@ -12,6 +12,9 @@
   let logBody: HTMLDivElement | undefined = $state();
   let envStatus: api.EnvStatusDto | null = $state(null);
   let appSettings: api.SettingsDto | null = $state(null);
+  let plugins = $state<string[]>([]);
+  let pluginName = $state("");
+  let pluginVersion = $state("");
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -154,6 +157,42 @@
     });
   }
 
+  function openSettings() {
+    settingsOpen = true;
+    api.pluginList().then((p) => (plugins = p)).catch(() => {});
+  }
+
+  async function installPlugin() {
+    if (pluginName.trim() === "") return;
+    await run("plugin", async () => {
+      try {
+        await api.pluginInstall(pluginName.trim(), pluginVersion.trim() || undefined);
+        pluginName = "";
+        pluginVersion = "";
+        plugins = await api.pluginList();
+        toast("插件已安装，重启内核后生效");
+        return null;
+      } catch (e) {
+        s.store.logPanelOpen = true;
+        return String(e);
+      }
+    });
+  }
+
+  async function removePlugin(name: string) {
+    await run("plugin", async () => {
+      try {
+        await api.pluginRemove(name);
+        plugins = await api.pluginList();
+        toast("插件已卸载，重启内核后生效");
+        return null;
+      } catch (e) {
+        s.store.logPanelOpen = true;
+        return String(e);
+      }
+    });
+  }
+
   onMount(() => {
     s.wireEvents();
     s.refreshStatus();
@@ -236,7 +275,7 @@
     </div>
 
     <div class="actions">
-      <button class="btn" onclick={() => (settingsOpen = true)}>内核</button>
+      <button class="btn" onclick={openSettings}>内核</button>
     </div>
   </header>
 
@@ -286,7 +325,7 @@
             <button class="btn-hero" onclick={start} disabled={busy !== null}>
               {s.store.kernel.status.state === "starting" ? "启动中…" : "启动内核"}
             </button>
-            <button class="link" onclick={() => (settingsOpen = true)}>内核管理</button>
+            <button class="link" onclick={openSettings}>内核管理</button>
           {/if}
         </div>
       </div>
@@ -387,6 +426,35 @@
             </label>
           </div>
           <p class="hint">日志文件保存在 ~/Library/Logs/deepseek-harness-desktop/kernel.log。</p>
+        </div>
+
+        <div class="field">
+          <span class="field-label">插件</span>
+          {#if plugins.length === 0}
+            <p class="hint" style="margin-top: 0">未安装插件。输入 npm 包名安装（如 dsh-better-sidebar），装完重启内核生效。</p>
+          {:else}
+            <div class="plugin-list">
+              {#each plugins as p (p)}
+                <div class="plugin-row">
+                  <span class="plugin-name">{p}</span>
+                  <button class="btn btn-sm" onclick={() => removePlugin(p.split("@")[0])} disabled={busy !== null}>
+                    卸载
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          <div class="row-inline" style="margin-top: 8px">
+            <input
+              type="text"
+              placeholder="插件包名（如 dsh-better-sidebar）"
+              bind:value={pluginName}
+            />
+            <input type="text" placeholder="版本（可选，如 0.10.3）" bind:value={pluginVersion} style="max-width: 110px" />
+            <button class="btn btn-primary" onclick={installPlugin} disabled={busy !== null || pluginName.trim() === ""}>
+              安装
+            </button>
+          </div>
         </div>
 
         <div class="modal-foot">
@@ -777,6 +845,27 @@
   }
   .check input {
     accent-color: var(--accent);
+  }
+  .plugin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .plugin-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12.5px;
+  }
+  .plugin-name {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
   }
   .error-box {
     background: #3a1618;
