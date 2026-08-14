@@ -373,9 +373,18 @@
     <div class="modal-mask" role="presentation" onclick={(e) => { if (e.target === e.currentTarget) settingsOpen = false; }}>
       <div class="modal" role="dialog" aria-modal="true" aria-label="内核管理">
         <h2>内核管理</h2>
-        {#if port}
-          <p class="modal-port">运行中 · 服务地址 <code>http://127.0.0.1:{port}</code></p>
-        {/if}
+
+        <div class={`modal-status ${port ? "status-on" : ""}`}>
+          {#if port}
+            <span class="status-dot"></span>
+            <span>运行中 · 服务地址 <code>http://127.0.0.1:{port}</code></span>
+          {:else}
+            <span class="status-dot"></span>
+            <span>内核未运行</span>
+          {/if}
+        </div>
+
+        <h3 class="group-title">内核</h3>
 
         <div class="field">
           <label for="kernel-dir">内核目录（deepseek-harness 仓库）</label>
@@ -416,8 +425,9 @@
           <div class="error-box">{s.store.lastUpdateError}</div>
         {/if}
 
+        <h3 class="group-title">偏好</h3>
+
         <div class="field">
-          <span class="field-label">偏好</span>
           <div class="row-inline">
             <label class="check">
               <input
@@ -445,8 +455,9 @@
           <p class="hint">日志文件保存在 ~/Library/Logs/deepseek-harness-desktop/kernel.log。</p>
         </div>
 
+        <h3 class="group-title">插件</h3>
+
         <div class="field">
-          <span class="field-label">插件</span>
           {#if plugins.length === 0}
             <p class="hint" style="margin-top: 0">未安装插件。输入 npm 包名安装（如 dsh-better-sidebar），装完重启内核生效。</p>
           {:else}
@@ -897,21 +908,64 @@
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   }
   .modal h2 {
-    margin: 0 0 14px;
+    margin: 0 0 16px;
     font-size: 16px;
   }
-  .modal-port {
-    margin: 0 0 16px;
+  .modal-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: 12.5px;
-    color: var(--text-dim);
-  }
-  .modal-port code {
+    color: var(--text-faint);
     background: var(--btn-bg);
     border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 9px 12px;
+    margin-bottom: 18px;
+  }
+  .modal-status .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #6b7280;
+    flex-shrink: 0;
+  }
+  .modal-status.status-on {
+    color: #34d399;
+    background: rgba(52, 211, 153, 0.08);
+    border-color: rgba(52, 211, 153, 0.28);
+  }
+  .modal-status.status-on .status-dot {
+    background: #34d399;
+    box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+  }
+  .modal-status code {
+    background: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.3);
     border-radius: 5px;
     padding: 1px 6px;
     font-size: 11.5px;
-    color: var(--text);
+    color: #34d399;
+  }
+  .group-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .group-title::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .group-title:first-of-type {
+    margin-top: 0;
   }
   .field {
     margin-bottom: 18px;
