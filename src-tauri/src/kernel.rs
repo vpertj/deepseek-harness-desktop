@@ -57,41 +57,58 @@ pub fn is_kernel_dir(dir: &Path) -> bool {
 /// GUI apps (Finder/launchd) get a minimal PATH, and login shells do NOT read
 /// ~/.zshrc (where mise/nvm/fnm activate), so we probe common locations
 /// directly instead of trusting `sh -lc`.
+/// Cache of the last successful toolchain probe. Login-shell probing is slow
+/// (zsh + oh-my-zsh init can take 1-2s), so we only pay it once per app run.
+static TOOLCHAIN_CACHE: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+/// Resolve the pnpm executable and a PATH that covers node/pnpm. Fast path:
+/// probe well-known locations directly (mise shims, pnpm dirs, homebrew) —
+/// no shell involved. The login shell is only consulted as a fallback for
+/// unusual installs. The result is cached for the process lifetime (a fresh
+/// app launch re-probes, so new installs are picked up next run).
 pub async fn resolve_toolchain() -> Result<(String, String), String> {
+    if let Some(cached) = TOOLCHAIN_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return Ok(cached);
+    }
     let home = std::env::var("HOME").unwrap_or_default();
 
-    // 1. Ask the login shell first (covers manually-installed pnpm).
-    //    Timeout: a hung login shell must never block the start flow.
+    // 1. Fast path: well-known locations (covers mise/nvm/homebrew without
+    //    spawning a login shell). This is the common case.
     let mut found: Option<String> = None;
     let mut shell_path = String::new();
-    let out = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        Command::new("sh").args(["-lc", "command -v pnpm; echo ---; printf '%s' \"$PATH\""]).output(),
-    )
-    .await
-    .map_err(|_| "shell 探测超时")?
-    .map_err(|e| format!("无法执行 shell 探测工具链: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
-    let mut parts = text.split("---");
-    let pnpm_in_shell = parts.next().unwrap_or("").trim().to_string();
-    shell_path = parts.next().unwrap_or("").trim().to_string();
-    if !pnpm_in_shell.is_empty() {
-        found = Some(pnpm_in_shell);
+    for candidate in [
+        format!("{home}/.local/share/mise/shims/pnpm"),
+        format!("{home}/.local/share/pnpm/pnpm"),
+        format!("{home}/.npm-global/bin/pnpm"),
+        "/opt/homebrew/bin/pnpm".to_string(),
+        "/usr/local/bin/pnpm".to_string(),
+    ] {
+        if std::path::Path::new(&candidate).is_file() {
+            found = Some(candidate);
+            break;
+        }
     }
 
-    // 2. Probe well-known locations (covers mise/nvm/homebrew without a login shell).
+    // 2. Slow path: ask the login shell (covers manually-installed pnpm).
+    //    Timeout: a hung login shell must never block the start flow.
     if found.is_none() {
-        for candidate in [
-            format!("{home}/.local/share/mise/shims/pnpm"),
-            format!("{home}/.local/share/pnpm/pnpm"),
-            format!("{home}/.npm-global/bin/pnpm"),
-            "/opt/homebrew/bin/pnpm".to_string(),
-            "/usr/local/bin/pnpm".to_string(),
-        ] {
-            if std::path::Path::new(&candidate).is_file() {
-                found = Some(candidate);
-                break;
-            }
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            Command::new("sh").args(["-lc", "command -v pnpm; echo ---; printf '%s' \"$PATH\""]).output(),
+        )
+        .await
+        .map_err(|_| "shell 探测超时")?
+        .map_err(|e| format!("无法执行 shell 探测工具链: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let mut parts = text.split("---");
+        let pnpm_in_shell = parts.next().unwrap_or("").trim().to_string();
+        shell_path = parts.next().unwrap_or("").trim().to_string();
+        if !pnpm_in_shell.is_empty() {
+            found = Some(pnpm_in_shell);
         }
     }
 
@@ -127,7 +144,9 @@ pub async fn resolve_toolchain() -> Result<(String, String), String> {
             full_path = format!("{full_path}:{cur}");
         }
     }
-    Ok((pnpm, full_path))
+    let result = (pnpm, full_path);
+    *TOOLCHAIN_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+    Ok(result)
 }
 
 /// Read the kernel checkout's git revision (short sha) and dirtiness.

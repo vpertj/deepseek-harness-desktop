@@ -219,21 +219,26 @@
     updateTimer = setInterval(() => {
       if (s.store.kernel.kernelDir) void s.checkUpdate();
     }, 30 * 60 * 1000);
-    // Auto-start the kernel if configured (setting default: on).
-    setTimeout(async () => {
-      try {
-        const st = await api.getSettings();
-        if (
-          st.auto_start &&
-          s.store.kernel.kernelDir &&
-          s.store.kernel.status.state === "stopped"
-        ) {
-          await s.startKernel();
+    // Auto-start the kernel the moment the initial refresh settles (no fixed
+    // delay): status + settings + env check all finish in well under a second,
+    // then startKernel runs immediately. Update check runs on its own timer.
+    setTimeout(() => {
+      void (async () => {
+        try {
+          await Promise.all([s.refreshStatus(), api.getSettings(), api.checkEnv()]);
+          const st = await api.getSettings();
+          if (
+            st.auto_start &&
+            s.store.kernel.kernelDir &&
+            s.store.kernel.status.state === "stopped"
+          ) {
+            await s.startKernel();
+          }
+        } catch {
+          // non-fatal
         }
-      } catch {
-        // non-fatal
-      }
-    }, 4000);
+      })();
+    }, 400);
     // Rust watches ~/.dsh/settings.yaml (100ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
     themeTimer = setInterval(syncTheme, 2000);
