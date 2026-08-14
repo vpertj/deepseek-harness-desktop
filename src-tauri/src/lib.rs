@@ -1,4 +1,5 @@
 mod config;
+mod credentials;
 mod kernel;
 mod settings;
 mod updater;
@@ -22,6 +23,9 @@ pub fn run() {
             settings::get_settings,
             settings::set_auto_start,
             settings::set_persist_logs,
+            credentials::api_key_status,
+            credentials::api_key_set,
+            credentials::api_key_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

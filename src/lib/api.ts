@@ -55,3 +55,17 @@ export function updateApply(): Promise<void> {
 export function kernelInstall(): Promise<void> {
   return invoke("kernel_install");
 }
+
+// ---- API key (macOS Keychain) --------------------------------------------
+
+export function apiKeyStatus(): Promise<boolean> {
+  return invoke("api_key_status");
+}
+
+export function apiKeySet(key: string): Promise<void> {
+  return invoke("api_key_set", { key });
+}
+
+export function apiKeyClear(): Promise<void> {
+  return invoke("api_key_clear");
+}

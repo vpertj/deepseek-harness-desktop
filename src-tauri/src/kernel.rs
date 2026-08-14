@@ -398,6 +398,12 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
         .env("PATH", &path_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    // Inject the DeepSeek API key from the Keychain so the web UI's model
+    // route works without manual configuration.
+    if let Some(key) = crate::credentials::get_api_key() {
+        cmd.env("DEEPSEEK_API_KEY", key);
+        eprintln!("[kernel] injected DEEPSEEK_API_KEY from Keychain");
+    }
     #[cfg(unix)]
     cmd.process_group(0);
     cmd.spawn().map_err(|e| format!("启动内核进程失败: {e}"))
@@ -460,8 +466,13 @@ pub async fn kernel_stop(manager: tauri::State<'_, KernelManager>) -> Result<(),
 mod tests {
     use super::*;
 
+    /// Serializes tests that grab a free port: find_free_port has a
+    /// TOCTOU window (release-then-rebind) that flakes under parallelism.
+    static PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn free_port_is_bindable() {
+        let _guard = PORT_LOCK.lock().unwrap();
         let port = find_free_port().unwrap();
         assert!(port > 0);
         let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
@@ -519,6 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_healthcheck_and_kill_web() {
+        let _guard = PORT_LOCK.lock().unwrap();
         // Real kernel checkout next to this repo; skip elsewhere.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
         if !is_kernel_dir(&dir) {
@@ -558,6 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_web_with_spaces_in_path() {
+        let _guard = PORT_LOCK.lock().unwrap();
         // The kernel dir must survive spaces in the path (e.g. "Application
         // Support"). Symlink the real checkout into a space-containing path.
         let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
