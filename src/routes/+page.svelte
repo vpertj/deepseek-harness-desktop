@@ -355,7 +355,7 @@
         {/if}
 
         <div class="field">
-          <label>偏好</label>
+          <span class="field-label">偏好</span>
           <div class="row-inline">
             <label class="check">
               <input
@@ -734,7 +734,8 @@
   .field {
     margin-bottom: 18px;
   }
-  .field label {
+  .field label,
+  .field-label {
     display: block;
     font-size: 12.5px;
     color: var(--text-dim);
