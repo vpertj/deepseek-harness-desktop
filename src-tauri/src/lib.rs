@@ -23,12 +23,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            eprintln!("[setup] begin");
             // Clean up kernel processes orphaned by a previous (crash/force
             // quit) run before the auto-start kicks in.
             kernel::kill_stale_owned();
             theme::start_watcher(app.handle().clone());
-            eprintln!("[setup] done");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -52,10 +50,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                eprintln!("[app] ExitRequested -> killing owned kernels");
-                // Stop the kernel we spawned (all DSH_DESKTOP_OWNED processes)
-                // so quitting the app doesn't leave orphans behind.
+            // Exit fires right before the process dies regardless of how the
+            // app was quit (red button, Cmd+Q, AppleEvent). Kill the kernels
+            // we spawned so no orphaned dsh web processes survive.
+            if matches!(event, tauri::RunEvent::Exit) {
                 kernel::kill_stale_owned();
             }
         });
