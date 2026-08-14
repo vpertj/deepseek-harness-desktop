@@ -137,6 +137,16 @@ pub async fn app_download_update(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("启动更新脚本失败: {e}"))?;
 
     let _ = app.emit("app-update-progress", serde_json::json!({ "phase": "ready", "percent": 100 }));
+
+    // Give the frontend a moment to show "ready", then exit the app for real.
+    // The detached install script waits for us to quit, swaps the .app and
+    // relaunches. Exiting from Rust (not the frontend) avoids depending on
+    // window-close IPC permissions.
+    let app_exit = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        app_exit.exit(0);
+    });
     Ok(())
 }
 
@@ -150,6 +160,7 @@ async fn download_with_progress(
 ) -> Result<(), String> {
     let url = url.to_string();
     let dest = dest.to_path_buf();
+    let dest_for_dl = dest.clone();
     let app = app.clone();
     let version = version.to_string();
     tokio::time::timeout(
@@ -157,7 +168,7 @@ async fn download_with_progress(
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let out = std::process::Command::new("curl")
                 .args(["-L", "-sS", "--fail", "-o"])
-                .arg(&dest)
+                .arg(&dest_for_dl)
                 .arg(&url)
                 .output()
                 .map_err(|e| format!("启动下载失败: {e}"))?;
@@ -171,6 +182,15 @@ async fn download_with_progress(
     .await
     .map_err(|_| "下载超时".to_string())?
     .map_err(|e| e.to_string())?;
+    // Guard against an empty/broken download (e.g. release asset not yet
+    // published): fail with a clear message instead of a confusing mount error.
+    let size = std::fs::metadata(&dest)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if size < 1024 * 1024 {
+        let _ = std::fs::remove_file(&dest);
+        return Err("下载的文件无效或为空（可能新版本尚未发布完成），请稍后再试".to_string());
+    }
     let _ = app.emit(
         "app-update-progress",
         serde_json::json!({ "phase": "downloaded", "percent": 100, "version": version }),
