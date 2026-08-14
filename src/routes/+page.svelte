@@ -311,7 +311,6 @@
       <div class="welcome">
         <div class="welcome-inner">
           <h1>DeepSeek Harness</h1>
-          <p class="lead">本地运行 deepseek-harness 内核 · 从 GitHub 一键更新</p>
 
           {#if envStatus}
             <p class={`env-status ${envStatus.ready ? "env-ok" : "env-warn"}`}>
