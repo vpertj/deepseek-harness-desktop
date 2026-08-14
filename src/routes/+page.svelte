@@ -442,7 +442,7 @@
 
         {#if profiles.length > 0}
           <div class="field">
-            <label>配置（多内核）</label>
+            <span class="field-label">配置（多内核）</span>
             <div class="profile-list">
               {#each profiles as p (p.name)}
                 <div class={`profile-row ${p.active ? "profile-active" : ""}`}>
