@@ -1241,62 +1241,6 @@
     margin: 0 0 16px;
     font-size: 16px;
   }
-  .modal-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12.5px;
-    color: var(--text-faint);
-    background: var(--btn-bg);
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    padding: 9px 12px;
-    margin-bottom: 18px;
-  }
-  .modal-status .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #6b7280;
-    flex-shrink: 0;
-  }
-  .modal-status.status-on {
-    color: #34d399;
-    background: rgba(52, 211, 153, 0.08);
-    border-color: rgba(52, 211, 153, 0.28);
-  }
-  .modal-status.status-on .status-dot {
-    background: #34d399;
-    box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
-  }
-  .modal-status code {
-    background: rgba(52, 211, 153, 0.12);
-    border: 1px solid rgba(52, 211, 153, 0.3);
-    border-radius: 5px;
-    padding: 1px 6px;
-    font-size: 11.5px;
-    color: #34d399;
-  }
-  .group-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 20px 0 12px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-dim);
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-  .group-title::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-  .group-title:first-of-type {
-    margin-top: 0;
-  }
   .field {
     margin-bottom: 18px;
   }
