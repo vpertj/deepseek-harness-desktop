@@ -178,10 +178,6 @@
 <main class="app">
   <!-- ============ 顶栏 ============ -->
   <header class="topbar">
-    <div class="brand">
-      <span class="name">DeepSeek Harness Desktop</span>
-    </div>
-
     <div class="actions">
       <span class={`pill pill-${s.store.kernel.status.state}`} title={kernelErrorHint}>
         <span class="dot"></span>
@@ -410,48 +406,12 @@
   .topbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 12px;
     padding: 8px 14px;
     background: #161a22;
     border-bottom: 1px solid #262c3a;
     flex-shrink: 0;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .logo {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, #4d7cfe, #1e4fd8);
-    color: #fff;
-    font-weight: 700;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .brand-text {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-  .name {
-    font-weight: 600;
-    font-size: 13px;
-  }
-  .sub {
-    font-size: 11px;
-    color: #8b93a7;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 420px;
   }
   .actions {
     display: flex;
