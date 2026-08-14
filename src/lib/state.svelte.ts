@@ -28,7 +28,8 @@ export const store = $state({
   lastUpdateError: null as string | null,
   logs: [] as LogLine[],
   logPanelOpen: false,
-  updateNotified: false,
+  /** Latest version we've already notified about (dedupe). */
+  updateNotified: null as string | null,
 });
 
 /** Send a macOS notification (requests permission on first use). */
@@ -187,8 +188,8 @@ export async function wireEvents() {
           dirty: false,
           error: null,
         };
-        if (payload.phase === "update_available" && !store.updateNotified) {
-          store.updateNotified = true;
+        if (payload.phase === "update_available" && store.updateNotified !== store.updateInfo.latest) {
+          store.updateNotified = store.updateInfo.latest;
           void notifyUpdate(
             `内核有更新 ${store.updateInfo.current} → ${store.updateInfo.latest}`,
             `落后 ${store.updateInfo.behind} 个提交，可在「内核」中一键更新。`,

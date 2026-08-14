@@ -160,10 +160,14 @@
     api.checkEnv().then((e) => (envStatus = e)).catch(() => {});
     api.getSettings().then((st) => (appSettings = st)).catch(() => {});
     syncTheme();
-    // Auto-check for kernel updates shortly after launch (needs kernel dir).
+    // Auto-check for kernel updates shortly after launch (needs kernel dir),
+    // then re-check periodically while the app runs.
     setTimeout(() => {
       if (s.store.kernel.kernelDir) void s.checkUpdate();
     }, 3000);
+    updateTimer = setInterval(() => {
+      if (s.store.kernel.kernelDir) void s.checkUpdate();
+    }, 30 * 60 * 1000);
     // Auto-start the kernel if configured (setting default: on).
     setTimeout(async () => {
       try {
@@ -188,12 +192,14 @@
     });
     return () => {
       clearInterval(themeTimer);
+      clearInterval(updateTimer);
       un.then((fn) => fn()).catch(() => {});
     };
   });
 
   // ---- Theme sync: follow the kernel UI's appearance (dsh settings.yaml) ----
   let themeTimer: ReturnType<typeof setInterval> | undefined;
+  let updateTimer: ReturnType<typeof setInterval> | undefined;
 
   function applyTheme(pref: string) {
     const dark =
