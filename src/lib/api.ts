@@ -82,6 +82,10 @@ export function appUpdateCheck(): Promise<AppUpdateInfo> {
   return invoke("app_update_check");
 }
 
+export function appDownloadUpdate(): Promise<void> {
+  return invoke("app_download_update");
+}
+
 export function updateCheck(): Promise<UpdateInfo> {
   return invoke("update_check");
 }

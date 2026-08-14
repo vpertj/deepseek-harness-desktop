@@ -54,6 +54,7 @@ pub fn run() {
             plugin::plugin_install,
             plugin::plugin_remove,
             app_update::app_update_check,
+            app_update::app_download_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

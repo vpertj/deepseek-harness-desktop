@@ -19,6 +19,8 @@
   let appVersion = $state("0.1.0");
   let appUpdate: api.AppUpdateInfo | null = $state(null);
   let appCheckBusy = $state(false);
+  let appUpdating = $state(false);
+  let appUpdatePhase = $state<string | null>(null);
   let modalTab = $state<"status" | "kernel" | "plugins" | "prefs" | "about">("status");
 
   // Auto-scroll the log panel to the newest line.
@@ -212,7 +214,29 @@
   }
 
   function goDownload() {
-    if (appUpdate?.url) void openUrl(appUpdate.url);
+    if (appUpdate?.url && !appUpdating) void openUrl(appUpdate.url);
+  }
+
+  async function doAutoUpdate() {
+    if (!appUpdate?.update_available || appUpdating) return;
+    appUpdating = true;
+    appUpdatePhase = "downloading";
+    try {
+      await api.appDownloadUpdate();
+      appUpdatePhase = "ready";
+      toast("更新已就绪，应用即将重启…", "ok");
+      // Closing the window quits the app; the detached install script then
+      // swaps the .app and relaunches the new version automatically.
+      setTimeout(() => {
+        void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
+          getCurrentWindow().close(),
+        );
+      }, 1500);
+    } catch (e) {
+      appUpdating = false;
+      appUpdatePhase = null;
+      toast(String(e), "err");
+    }
   }
 
   async function installPlugin() {
@@ -297,10 +321,15 @@
       const pref = (e.payload as { preference?: string | null }).preference ?? "system";
       applyTheme(pref);
     });
+    const unProg = listen("app-update-progress", (e) => {
+      const p = e.payload as { phase?: string; percent?: number };
+      if (p.phase) appUpdatePhase = p.phase === "ready" ? "ready" : p.phase;
+    });
     return () => {
       clearInterval(themeTimer);
       clearInterval(updateTimer);
       un.then((fn) => fn()).catch(() => {});
+      unProg.then((fn) => fn()).catch(() => {});
     };
   });
 
@@ -566,9 +595,21 @@
                 <div class="update-banner">
                   <div>
                     <strong>发现新版本 v{appUpdate.latest}</strong>
-                    <p>当前版本 v{appUpdate.current}，GitHub Releases 已发布新版本。</p>
+                    <p>
+                      {appUpdating
+                        ? appUpdatePhase === "ready"
+                          ? "更新已就绪，正在重启应用…"
+                          : "正在下载更新，请稍候…"
+                        : `当前版本 v${appUpdate.current}，可一键自动更新。`}
+                    </p>
                   </div>
-                  <button class="btn btn-primary" onclick={goDownload}>下载更新</button>
+                  <button
+                    class="btn btn-primary"
+                    onclick={doAutoUpdate}
+                    disabled={appUpdating}
+                  >
+                    {appUpdating ? (appUpdatePhase === "ready" ? "准备重启…" : "下载中…") : "立即更新"}
+                  </button>
                 </div>
               {/if}
               <div class="field">
