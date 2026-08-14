@@ -1,4 +1,9 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import * as api from "./api";
 
 export interface LogLine {
@@ -23,7 +28,23 @@ export const store = $state({
   lastUpdateError: null as string | null,
   logs: [] as LogLine[],
   logPanelOpen: false,
+  updateNotified: false,
 });
+
+/** Send a macOS notification (requests permission on first use). */
+async function notifyUpdate(title: string, body: string) {
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      granted = (await requestPermission()) === "granted";
+    }
+    if (granted) {
+      sendNotification({ title, body });
+    }
+  } catch {
+    // notifications are best-effort
+  }
+}
 
 // Derived helpers live in components ($derived cannot be exported from modules).
 
@@ -166,6 +187,13 @@ export async function wireEvents() {
           dirty: false,
           error: null,
         };
+        if (payload.phase === "update_available" && !store.updateNotified) {
+          store.updateNotified = true;
+          void notifyUpdate(
+            `内核有更新 ${store.updateInfo.current} → ${store.updateInfo.latest}`,
+            `落后 ${store.updateInfo.behind} 个提交，可在「内核」中一键更新。`,
+          );
+        }
       } else if (payload.phase === "done") {
         store.lastUpdateError = null;
         refreshStatus();

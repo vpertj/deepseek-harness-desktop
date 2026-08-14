@@ -158,6 +158,10 @@
     s.refreshStatus();
     api.checkEnv().then((e) => (envStatus = e)).catch(() => {});
     syncTheme();
+    // Auto-check for kernel updates shortly after launch (needs kernel dir).
+    setTimeout(() => {
+      if (s.store.kernel.kernelDir) void s.checkUpdate();
+    }, 3000);
     // Rust watches ~/.dsh/settings.yaml (300ms) and pushes theme-changed;
     // keep a slow fallback poll in case the event is missed.
     themeTimer = setInterval(syncTheme, 30000);

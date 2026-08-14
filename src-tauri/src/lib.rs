@@ -12,6 +12,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(KernelManager::default())
         .setup(|app| {
             theme::start_watcher(app.handle().clone());
