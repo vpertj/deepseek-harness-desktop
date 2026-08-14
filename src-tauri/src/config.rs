@@ -1,16 +1,30 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// One user-configured kernel checkout (multi-kernel profiles).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KernelProfile {
+    /// User-facing name, unique.
+    pub name: String,
+    /// Absolute path to the kernel checkout.
+    pub dir: PathBuf,
+}
+
 /// Shell app settings, persisted as JSON in the app config dir.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
-    /// Absolute path to the deepseek-harness kernel checkout.
+    /// Absolute path to the deepseek-harness kernel checkout (legacy field;
+    /// profiles supersede it, kept for backward compatibility).
     pub kernel_dir: Option<PathBuf>,
     /// Start the kernel automatically when the app launches.
     pub auto_start: bool,
     /// Persist kernel logs to a file.
     pub persist_logs: bool,
+    /// Multi-kernel profiles.
+    pub profiles: Vec<KernelProfile>,
+    /// Name of the active profile (matches `profiles[].name`).
+    pub active_profile: Option<String>,
 }
 
 impl Default for Settings {
@@ -19,11 +33,47 @@ impl Default for Settings {
             kernel_dir: None,
             auto_start: true,
             persist_logs: true,
+            profiles: Vec::new(),
+            active_profile: None,
         }
     }
 }
 
 impl Settings {
+    /// The effective kernel dir: the active profile's dir when profiles
+    /// exist, otherwise the legacy `kernel_dir`.
+    pub fn effective_kernel_dir(&self) -> Option<PathBuf> {
+        if let Some(name) = &self.active_profile {
+            if let Some(p) = self.profiles.iter().find(|p| &p.name == name) {
+                return Some(p.dir.clone());
+            }
+        }
+        if !self.profiles.is_empty() {
+            return Some(self.profiles[0].dir.clone());
+        }
+        self.kernel_dir.clone()
+    }
+
+    /// Add or replace a profile by name. Returns Err on duplicate name with a
+    /// different dir (caller decides) — here we keep semantics simple: replace.
+    pub fn upsert_profile(&mut self, name: String, dir: PathBuf) {
+        if let Some(existing) = self.profiles.iter_mut().find(|p| p.name == name) {
+            existing.dir = dir;
+        } else {
+            self.profiles.push(KernelProfile { name, dir });
+        }
+    }
+
+    pub fn remove_profile(&mut self, name: &str) -> bool {
+        let before = self.profiles.len();
+        self.profiles.retain(|p| p.name != name);
+        let removed = self.profiles.len() != before;
+        if removed && self.active_profile.as_deref() == Some(name) {
+            self.active_profile = self.profiles.first().map(|p| p.name.clone());
+        }
+        removed
+    }
+
     pub fn config_path() -> PathBuf {
         let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         base.join("com.deepseekharness.desktop")
@@ -72,6 +122,11 @@ mod tests {
             kernel_dir: Some(PathBuf::from("/tmp/fake-kernel")),
             auto_start: false,
             persist_logs: false,
+            profiles: vec![KernelProfile {
+                name: "dev".to_string(),
+                dir: PathBuf::from("/tmp/fake-kernel"),
+            }],
+            active_profile: Some("dev".to_string()),
         };
         original.save_to(&path).unwrap();
         let loaded = Settings::load_from(&path);

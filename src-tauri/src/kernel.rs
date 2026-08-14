@@ -201,7 +201,7 @@ impl Default for KernelManager {
         );
         KernelManager {
             inner: Arc::new(Mutex::new(KernelInner {
-                kernel_dir: settings.kernel_dir,
+                kernel_dir: settings.effective_kernel_dir(),
                 status: KernelStatus::Stopped,
                 child: None,
             })),
@@ -497,6 +497,112 @@ pub async fn kernel_start(
 #[tauri::command]
 pub async fn kernel_stop(manager: tauri::State<'_, KernelManager>) -> Result<(), String> {
     manager.stop().await
+}
+
+// ---------------------------------------------------------------------------
+// Multi-kernel profiles
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileDto {
+    pub name: String,
+    pub dir: PathBuf,
+    pub active: bool,
+    pub revision: Option<String>,
+}
+
+/// List all configured kernel profiles.
+#[tauri::command]
+pub async fn kernel_profiles() -> Result<Vec<ProfileDto>, String> {
+    let settings = crate::config::Settings::load();
+    let active = settings
+        .active_profile
+        .clone()
+        .or_else(|| settings.profiles.first().map(|p| p.name.clone()));
+    Ok(settings
+        .profiles
+        .iter()
+        .map(|p| {
+            let revision = if crate::kernel::is_kernel_dir(&p.dir) {
+                crate::kernel::git_revision(&p.dir)
+            } else {
+                (None, false)
+            }
+            .0;
+            ProfileDto {
+                name: p.name.clone(),
+                dir: p.dir.clone(),
+                active: active.as_deref() == Some(p.name.as_str()),
+                revision,
+            }
+        })
+        .collect())
+}
+
+/// Add a new kernel profile (validates the directory). Becomes active when it
+/// is the only profile or when no profile was active before.
+#[tauri::command]
+pub async fn kernel_add_profile(
+    name: String,
+    dir: String,
+    manager: tauri::State<'_, KernelManager>,
+) -> Result<Vec<ProfileDto>, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("请输入配置名称".to_string());
+    }
+    let dir = std::path::PathBuf::from(dir);
+    if !crate::kernel::is_kernel_dir(&dir) {
+        return Err(format!(
+            "{} 不是有效的 deepseek-harness 仓库（缺少 package.json / pnpm-workspace.yaml / apps/cli/src/bin.ts）",
+            dir.display()
+        ));
+    }
+    let mut settings = crate::config::Settings::load();
+    let first = settings.profiles.is_empty();
+    settings.upsert_profile(name, dir);
+    if first {
+        settings.active_profile = settings.profiles.first().map(|p| p.name.clone());
+    }
+    settings.save()?;
+    manager.set_kernel_dir(settings.effective_kernel_dir().unwrap_or_default()).await?;
+    kernel_profiles().await
+}
+
+/// Remove a profile. The active profile cannot be removed; removing a
+/// non-active one is always allowed.
+#[tauri::command]
+pub async fn kernel_remove_profile(
+    name: String,
+    manager: tauri::State<'_, KernelManager>,
+) -> Result<Vec<ProfileDto>, String> {
+    let mut settings = crate::config::Settings::load();
+    if settings.active_profile.as_deref() == Some(name.as_str()) {
+        return Err("不能删除当前使用的配置，请先切换到其他配置".to_string());
+    }
+    settings.remove_profile(&name);
+    settings.save()?;
+    manager.set_kernel_dir(settings.effective_kernel_dir().unwrap_or_default()).await?;
+    kernel_profiles().await
+}
+
+/// Switch the active profile. If the kernel is running it is stopped first
+/// (the user restarts it afterwards), so switching never leaves two kernels.
+#[tauri::command]
+pub async fn kernel_set_active(
+    name: String,
+    manager: tauri::State<'_, KernelManager>,
+) -> Result<Vec<ProfileDto>, String> {
+    let mut settings = crate::config::Settings::load();
+    if !settings.profiles.iter().any(|p| p.name == name) {
+        return Err(format!("配置不存在: {name}"));
+    }
+    settings.active_profile = Some(name.clone());
+    settings.save()?;
+    // Stop any running kernel so switching never leaves two instances.
+    let _ = manager.stop().await;
+    manager.set_kernel_dir(settings.effective_kernel_dir().unwrap_or_default()).await?;
+    kernel_profiles().await
 }
 
 /// Kill dsh web processes owned by this app that survived a previous run

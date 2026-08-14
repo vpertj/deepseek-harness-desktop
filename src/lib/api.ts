@@ -44,6 +44,31 @@ export function kernelStop(): Promise<void> {
   return invoke("kernel_stop");
 }
 
+// ---- Kernel profiles (multi-kernel) ----------------------------------------
+
+export interface ProfileDto {
+  name: string;
+  dir: string;
+  active: boolean;
+  revision: string | null;
+}
+
+export function kernelProfiles(): Promise<ProfileDto[]> {
+  return invoke("kernel_profiles");
+}
+
+export function kernelAddProfile(name: string, dir: string): Promise<ProfileDto[]> {
+  return invoke("kernel_add_profile", { name, dir });
+}
+
+export function kernelRemoveProfile(name: string): Promise<ProfileDto[]> {
+  return invoke("kernel_remove_profile", { name });
+}
+
+export function kernelSetActive(name: string): Promise<ProfileDto[]> {
+  return invoke("kernel_set_active", { name });
+}
+
 export function updateCheck(): Promise<UpdateInfo> {
   return invoke("update_check");
 }
