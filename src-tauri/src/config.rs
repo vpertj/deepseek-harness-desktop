@@ -7,11 +7,19 @@ use std::path::{Path, PathBuf};
 pub struct Settings {
     /// Absolute path to the deepseek-harness kernel checkout.
     pub kernel_dir: Option<PathBuf>,
+    /// Start the kernel automatically when the app launches.
+    pub auto_start: bool,
+    /// Persist kernel logs to a file.
+    pub persist_logs: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { kernel_dir: None }
+        Settings {
+            kernel_dir: None,
+            auto_start: true,
+            persist_logs: true,
+        }
     }
 }
 
@@ -62,6 +70,8 @@ mod tests {
         let path = temp_settings_path("roundtrip");
         let original = Settings {
             kernel_dir: Some(PathBuf::from("/tmp/fake-kernel")),
+            auto_start: false,
+            persist_logs: false,
         };
         original.save_to(&path).unwrap();
         let loaded = Settings::load_from(&path);
@@ -73,6 +83,7 @@ mod tests {
         let path = temp_settings_path("missing");
         let loaded = Settings::load_from(&path);
         assert_eq!(loaded, Settings::default());
+        assert!(loaded.auto_start, "auto_start 默认开启");
     }
 
     #[test]

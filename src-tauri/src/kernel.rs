@@ -390,7 +390,11 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
     let (pnpm, path_env) = resolve_toolchain().await?;
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
-        .arg(format!("cd {} && exec '{}' dsh web --port {port}", dir.display(), pnpm))
+        .arg(format!(
+            "cd '{}' && exec '{}' dsh web --port {port}",
+            dir.display(),
+            pnpm
+        ))
         .env("PATH", &path_env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -550,5 +554,33 @@ mod tests {
         }
         assert!(!tcp_probe(port).await, "端口 {port} 在 kill 后仍被占用");
         let _ = child.kill().await;
+    }
+
+    #[tokio::test]
+    async fn spawn_web_with_spaces_in_path() {
+        // The kernel dir must survive spaces in the path (e.g. "Application
+        // Support"). Symlink the real checkout into a space-containing path.
+        let real = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../deepseek-harness");
+        if !is_kernel_dir(&real) {
+            eprintln!("跳过: 未找到内核目录 {}", real.display());
+            return;
+        }
+        let link = std::env::temp_dir().join(format!("dsh kernel test {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&link);
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let port = find_free_port().unwrap();
+        let mut child = spawn_web(&link, port).await.expect("spawn dsh web via spaced path");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut healthy = false;
+        while std::time::Instant::now() < deadline {
+            if tcp_probe(port).await {
+                healthy = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+        assert!(healthy, "带空格路径下 dsh web 未就绪 (port {port})");
+        let _ = child.kill().await;
+        let _ = std::fs::remove_dir_all(&link);
     }
 }
