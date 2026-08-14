@@ -220,7 +220,13 @@ pub async fn install_kernel(
     if target_dir.exists() {
         eprintln!("[updater] target exists, is_kernel_dir = {}", is_kernel_dir(&target_dir));
         if is_kernel_dir(&target_dir) {
-            eprintln!("[updater] adopting existing checkout");
+            let needs = needs_build(&target_dir);
+            eprintln!("[updater] adopting existing checkout, needs_build = {needs}");
+            if needs {
+                let (pnpm, path_env) = resolve_toolchain().await?;
+                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，执行 pnpm run build ==" }));
+                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build"]).await?;
+            }
             manager.set_kernel_dir(target_dir).await?;
             return Ok(());
         }
@@ -246,6 +252,13 @@ pub async fn install_kernel(
         serde_json::json!({ "stream": "out", "line": "== 内核安装完成 ==" }),
     );
     Ok(())
+}
+
+/// True when the checkout's build artifacts are missing (lib bundles or web dist).
+/// Used to decide whether an existing checkout needs a rebuild before adopt.
+fn needs_build(dir: &Path) -> bool {
+    !dir.join("packages/typert/registry/lib/client.js").is_file()
+        || !dir.join("apps/web/dist/index.html").is_file()
 }
 
 // ---------------------------------------------------------------------------
@@ -284,5 +297,24 @@ mod tests {
     fn default_kernel_dir_is_under_data_dir() {
         let dir = default_kernel_dir();
         assert!(dir.ends_with("com.deepseekharness.desktop/kernel"));
+    }
+
+    #[test]
+    fn needs_build_detects_missing_artifacts() {
+        let tmp = std::env::temp_dir().join(format!("dsh-needs-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("packages/typert/registry/lib")).unwrap();
+        std::fs::create_dir_all(tmp.join("apps/web/dist")).unwrap();
+
+        // Nothing built -> needs build.
+        assert!(needs_build(&tmp));
+
+        // Only web dist -> still needs lib bundles.
+        std::fs::write(tmp.join("apps/web/dist/index.html"), "<html></html>").unwrap();
+        assert!(needs_build(&tmp));
+
+        // Both present -> no rebuild needed.
+        std::fs::write(tmp.join("packages/typert/registry/lib/client.js"), "// client").unwrap();
+        assert!(!needs_build(&tmp));
     }
 }
