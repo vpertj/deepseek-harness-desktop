@@ -293,10 +293,11 @@ fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> 
 /// Serve `host.pickDirectory` with the app's native folder picker, answering
 /// the same RPC envelope the kernel would produce.
 ///
-/// The dialog MUST run on the main thread: macOS AppKit dialogs fail
-/// silently when opened from a background thread (the proxy handler thread
-/// is one), so we hop to the main thread via `run_on_main_thread` and wait
-/// on a channel for the result.
+/// Uses the NON-blocking `pick_folder` API: it shows the dialog on the main
+/// thread without occupying the event loop (the blocking variant deadlocks
+/// macOS here — AppKit dialogs need the main thread, but a blocking call on
+/// the main thread freezes the app). The result arrives via callback, so we
+/// hand the request to the callback thread and wait on a channel.
 fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Result<(), String> {
     let mut body = Vec::new();
     request
@@ -308,20 +309,14 @@ fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Re
         .and_then(|v| v.get("rpcId").and_then(|r| r.as_str()).map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Hop to the main thread for the dialog; wait up to 2 minutes for the
-    // user to pick or cancel. If the hop itself fails (app shutting down),
-    // answer with null so the kernel UI treats it as a cancellation.
-    let (tx, rx) = std::sync::mpsc::channel();
-    let app_for_main = app.clone();
-    if app
-        .run_on_main_thread(move || {
-            use tauri_plugin_dialog::DialogExt;
-            let picked = app_for_main.dialog().file().blocking_pick_folder();
-            let _ = tx.send(picked.map(|p| p.to_string()));
-        })
-        .is_err()
+    // Non-blocking dialog; the callback fires on the main thread after the
+    // user picks or cancels. Wait up to 2 minutes for it.
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
     {
-        eprintln!("[proxy] run_on_main_thread failed for pickDirectory");
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog().file().pick_folder(move |picked| {
+            let _ = tx.send(picked.map(|p| p.to_string()));
+        });
     }
     let picked = rx
         .recv_timeout(std::time::Duration::from_secs(120))
