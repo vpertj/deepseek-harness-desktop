@@ -440,18 +440,6 @@
 </svelte:head>
 
 <main class="app">
-  <!-- ============ 顶栏 ============ -->
-  <header class="topbar">
-    <div class="status" title={kernelErrorHint ?? ""}>
-      <span class={`dot dot-${s.store.kernel.status.state}`}></span>
-      <span class="status-text">{stateLabel}</span>
-    </div>
-
-    <div class="actions">
-      <button class="btn" onclick={openSettings}>内核</button>
-    </div>
-  </header>
-
   {#if kernelErrorHint}
     <div class="error-banner">{kernelErrorHint}</div>
   {/if}
@@ -526,6 +514,18 @@
       </div>
     {/if}
   </section>
+
+  <!-- ============ 底部栏 ============ -->
+  <footer class="bottombar">
+    <div class="status" title={kernelErrorHint ?? ""}>
+      <span class={`dot dot-${s.store.kernel.status.state}`}></span>
+      <span class="status-text">{stateLabel}</span>
+    </div>
+
+    <div class="actions">
+      <button class="btn" onclick={openSettings}>内核</button>
+    </div>
+  </footer>
 
   <!-- ============ 日志面板 ============ -->
   {#if s.store.logPanelOpen}
@@ -796,15 +796,15 @@
     overflow: hidden;
   }
 
-  /* ---- 顶栏 ---- */
-  .topbar {
+  /* ---- 底部栏 ---- */
+  .bottombar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 16px;
+    padding: 6px 16px;
     background: var(--surface);
-    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border);
     flex-shrink: 0;
   }
   .status {
