@@ -522,9 +522,6 @@
         <span class={`dot dot-${s.store.kernel.status.state}`}></span>
         <span class="status-text">{stateLabel}</span>
       </div>
-      {#if port !== null}
-        <span class="bar-meta" title="内核服务地址">127.0.0.1:{port}</span>
-      {/if}
     </div>
 
     <div class="bar-right">
@@ -879,13 +876,6 @@
     font-size: 12px;
     font-weight: 500;
     color: var(--text);
-    white-space: nowrap;
-  }
-  /* 内核端口元信息 */
-  .bar-meta {
-    font-size: 11px;
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    color: var(--text-faint);
     white-space: nowrap;
   }
   /* 齿轮按钮 */
