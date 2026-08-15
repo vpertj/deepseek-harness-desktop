@@ -20,6 +20,7 @@ export const store = $state({
     kernelDir: null as string | null,
     revision: null as string | null,
     dirty: false,
+    valid: false,
   },
   updateInfo: null as api.UpdateInfo | null,
   checkingUpdate: false,
@@ -69,6 +70,7 @@ export async function refreshStatus() {
     store.kernel.kernelDir = s.kernel_dir;
     store.kernel.revision = s.revision;
     store.kernel.dirty = s.dirty;
+    store.kernel.valid = s.valid;
   } catch (e) {
     console.error("kernel_status failed", e);
   }

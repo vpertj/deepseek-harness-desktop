@@ -17,6 +17,8 @@ export interface KernelStatus {
   kernel_dir: string | null;
   revision: string | null;
   dirty: boolean;
+  /** True when the configured dir is a valid kernel checkout (works without git). */
+  valid: boolean;
 }
 
 export interface UpdateInfo {

@@ -183,9 +183,9 @@
       }
 
       // 2. Kernel: auto-install when none is configured or the configured dir
-      // is invalid (revision is null when the dir is not a git checkout).
+      // is not a valid checkout (valid works even without git).
       await s.refreshStatus();
-      if (!s.store.kernel.kernelDir || !s.store.kernel.revision) {
+      if (!s.store.kernel.kernelDir || !s.store.kernel.valid) {
         toast("环境已就绪，正在自动安装内核…");
         s.store.logPanelOpen = true;
         s.appendLog("out", "== 自动安装内核（首次运行）==");

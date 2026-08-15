@@ -27,6 +27,9 @@ pub struct KernelInfo {
     pub revision: Option<String>,
     /// True when the working tree is dirty (local modifications).
     pub dirty: bool,
+    /// True when the configured dir looks like a kernel checkout. Works even
+    /// without git (a tarball install has no .git but is still valid).
+    pub valid: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,11 +219,13 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
             dirty,
+            valid,
         }
     }
 
@@ -231,11 +236,13 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
             dirty,
+            valid,
         }
     }
 
@@ -248,11 +255,13 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         Some(KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
             dirty,
+            valid,
         })
     }
 

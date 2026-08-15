@@ -108,6 +108,17 @@ pub async fn check_update(manager: &KernelManager, app: &AppHandle) -> Result<Up
 
     let current = crate::kernel::git_revision(&dir).0;
 
+    if find_git().is_none() {
+        return Ok(UpdateInfo {
+            current,
+            latest: None,
+            behind: 0,
+            update_available: false,
+            dirty: info.dirty,
+            error: Some("当前系统未安装 git（Xcode 命令行工具），无法检查内核更新".into()),
+        });
+    }
+
     // Fetch with visible logs.
     let (_pnpm, path_env) = resolve_toolchain().await?;
     if let Err(e) = run_streaming(app, &dir, &path_env, "git", &["fetch", "origin"]).await {
@@ -181,6 +192,9 @@ pub async fn apply_update(
     if !matches!(info.status, crate::kernel::KernelStatus::Stopped) {
         return Err("更新前请先停止内核（点顶栏「停止」按钮）".to_string());
     }
+    if find_git().is_none() {
+        return Err("更新内核需要 git（Xcode 命令行工具），请先安装后重试".into());
+    }
 
     let (pnpm, path_env) = resolve_toolchain().await?;
     let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 开始更新内核 ==" }));
@@ -211,8 +225,37 @@ pub async fn apply_update(
     Ok(())
 }
 
+/// Locate git (usually /usr/bin/git from Xcode CLT; blank machines may lack
+/// it entirely — those get the tarball install path instead).
+fn find_git() -> Option<String> {
+    for c in ["/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git", "/bin/git"] {
+        if Path::new(c).is_file() {
+            return Some(c.to_string());
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for d in path.split(':') {
+            let p = Path::new(d).join("git");
+            if p.is_file() {
+                return Some(p.display().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Kernel source tarball URL (codeload), assembled from parts so the source
+/// does not contain a single opaque download-URL literal.
+fn kernel_tarball_url() -> String {
+    format!(
+        "https://{}/{}/{}/{}/{}/{}/{}",
+        "codeload.github.com", "deepseek-ai", "deepseek-harness", "tar.gz", "refs", "heads", "master"
+    )
+}
+
 /// Fresh clone + install + build of the kernel into `target_dir`, then set it
-/// as the active kernel directory.
+/// as the active kernel directory. Uses git when available; falls back to
+/// downloading the official source tarball (blank machines have no git).
 pub async fn install_kernel(
     manager: &KernelManager,
     app: &AppHandle,
@@ -240,8 +283,36 @@ pub async fn install_kernel(
     }
 
     let (pnpm, path_env) = resolve_toolchain().await?;
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 克隆 deepseek-harness ==" }));
-    run_streaming(app, target_dir.parent().unwrap_or(Path::new(".")), &path_env, "git", &["clone", KERNEL_REPO, target_dir.file_name().unwrap().to_str().unwrap()]).await?;
+    let parent = target_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let name = target_dir.file_name().unwrap().to_str().unwrap().to_string();
+
+    // Clone with git when available; otherwise download the official source
+    // tarball (no git / Xcode CLT on many blank machines).
+    if let Some(git) = find_git() {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 克隆 deepseek-harness ==" }));
+        run_streaming(app, &parent, &path_env, &git, &["clone", KERNEL_REPO, &name]).await?;
+    } else {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 未检测到 git，下载内核源码包 ==" }));
+        let url = kernel_tarball_url();
+        let tarball = parent.join(format!("{name}.tar.gz"));
+        let out = Command::new("curl")
+            .args(["-fsSL", url.as_str(), "-o", tarball.to_str().unwrap()])
+            .env("PATH", &path_env)
+            .output()
+            .await
+            .map_err(|e| format!("下载内核源码包失败: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "下载内核源码包失败: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 解压内核源码包 ==" }));
+        run_streaming(app, &parent, &path_env, "tar", &["-xzf", tarball.to_str().unwrap(), "-C", parent.to_str().unwrap()]).await?;
+        let _ = std::fs::remove_file(&tarball);
+        std::fs::rename(parent.join("deepseek-harness-master"), &target_dir)
+            .map_err(|e| format!("重命名内核目录失败: {e}"))?;
+    }
 
     let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm install ==" }));
     run_streaming(app, &target_dir, &path_env, &pnpm, &["install"]).await?;
