@@ -517,13 +517,24 @@
 
   <!-- ============ 底部栏 ============ -->
   <footer class="bottombar">
-    <div class="status" title={kernelErrorHint ?? ""}>
-      <span class={`dot dot-${s.store.kernel.status.state}`}></span>
-      <span class="status-text">{stateLabel}</span>
+    <div class="bar-left">
+      <div class={`status-pill pill-${s.store.kernel.status.state}`} title={kernelErrorHint ?? ""}>
+        <span class={`dot dot-${s.store.kernel.status.state}`}></span>
+        <span class="status-text">{stateLabel}</span>
+      </div>
+      {#if port !== null}
+        <span class="bar-meta" title="内核服务地址">127.0.0.1:{port}</span>
+      {/if}
     </div>
 
-    <div class="actions">
-      <button class="btn" onclick={openSettings}>内核</button>
+    <div class="bar-right">
+      <button class="btn btn-gear" onclick={openSettings} title="内核管理">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span>内核</span>
+      </button>
     </div>
   </footer>
 
@@ -802,35 +813,62 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 6px 16px;
+    padding: 7px 14px;
     background: var(--surface);
     border-top: 1px solid var(--border);
     flex-shrink: 0;
-  }
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: default;
     user-select: none;
   }
+  .bar-left,
+  .bar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  /* 状态胶囊徽章 */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    cursor: default;
+    transition: background 0.2s;
+  }
+  .pill-running {
+    background: rgba(52, 211, 153, 0.1);
+    border-color: rgba(52, 211, 153, 0.25);
+  }
+  .pill-starting {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.25);
+  }
+  .pill-error {
+    background: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.25);
+  }
   .dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: #6b7280;
+    flex-shrink: 0;
   }
   .dot-running {
     background: #34d399;
-    box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+    box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
   }
   .dot-starting {
     background: #fbbf24;
+    box-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
     animation: pulse 1s infinite;
   }
   .dot-error {
     background: #f87171;
-    box-shadow: 0 0 6px rgba(248, 113, 113, 0.6);
+    box-shadow: 0 0 6px rgba(248, 113, 113, 0.7);
   }
   @keyframes pulse {
     50% {
@@ -838,14 +876,31 @@
     }
   }
   .status-text {
-    font-size: 12.5px;
+    font-size: 12px;
+    font-weight: 500;
     color: var(--text);
+    white-space: nowrap;
   }
-  .actions {
-    display: flex;
+  /* 内核端口元信息 */
+  .bar-meta {
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+  /* 齿轮按钮 */
+  .btn-gear {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
+    gap: 6px;
+    padding: 4px 12px;
+  }
+  .btn-gear svg {
+    opacity: 0.75;
+    transition: opacity 0.15s;
+  }
+  .btn-gear:hover svg {
+    opacity: 1;
   }
 
   /* ---- 按钮（幽灵风，对齐内核 UI） ---- */
