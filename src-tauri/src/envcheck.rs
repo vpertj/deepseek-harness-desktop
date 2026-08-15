@@ -113,7 +113,14 @@ fn find_in(dirs: &[PathBuf], bin: &str) -> Option<PathBuf> {
 }
 
 fn version_of(bin: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new(bin).args(args).output().ok()?;
+    // GUI-launched apps get a minimal PATH; pnpm is a corepack shim whose
+    // `#!/usr/bin/env node` shebang needs node on PATH, so always pass the
+    // full candidate PATH to the version probe.
+    let out = Command::new(bin)
+        .args(args)
+        .env("PATH", full_path_env())
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -217,12 +224,13 @@ pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
     }
 
     if installed_anything {
-        // pnpm via corepack (bundled with node).
+        // pnpm via corepack (bundled with node). Pass the full candidate PATH
+        // so the corepack shim can find node (GUI apps get a minimal PATH).
         if let Some(corepack_bin) = find_in(&dirs, "corepack") {
             let _ = crate::updater::run_streaming(
                 &app,
                 Path::new("."),
-                &std::env::var("PATH").unwrap_or_default(),
+                &full_path_env(),
                 &corepack_bin.display().to_string(),
                 &["enable", "pnpm"],
             )
