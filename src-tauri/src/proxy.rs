@@ -311,10 +311,20 @@ fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Re
 
     // Non-blocking dialog; the callback fires on the main thread after the
     // user picks or cancels. Wait up to 2 minutes for it.
+    //
+    // Bind to the main window as its parent: without a parent the dialog is
+    // an independent window that can end up BEHIND the shell window (the
+    // iframe keeps focus), looking like nothing happened. As a sheet it is
+    // attached to the shell window and always on top.
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
     {
+        use tauri::Manager;
         use tauri_plugin_dialog::DialogExt;
-        app.dialog().file().pick_folder(move |picked| {
+        let mut builder = app.dialog().file();
+        if let Some(window) = app.get_webview_window("main") {
+            builder = builder.set_parent(&window);
+        }
+        builder.pick_folder(move |picked| {
             let _ = tx.send(picked.map(|p| p.to_string()));
         });
     }
