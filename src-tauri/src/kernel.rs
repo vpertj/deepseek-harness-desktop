@@ -294,6 +294,11 @@ impl KernelManager {
     /// Spawn `pnpm dsh web --port <free>` inside the kernel dir and stream
     /// its output to the frontend. Returns the chosen port.
     pub async fn start(&self, app: &AppHandle) -> Result<u16, String> {
+        // Auto-install bundled sidecar plugins (dsh-better-sidebar etc.) on
+        // first launch. Idempotent and failure-tolerant: never blocks start.
+        if let Err(e) = crate::plugin::ensure_sidecar_plugins(self, app).await {
+            eprintln!("[kernel] sidecar plugin setup warning: {e}");
+        }
         // Take over any dsh web instance the user started outside this app
         // (own terminal, scripts, other tools) before spawning ours.
         let taken = kill_external_dsh_web();

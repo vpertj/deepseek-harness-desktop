@@ -113,6 +113,107 @@ pub async fn plugin_remove(
     Ok(())
 }
 
+/// Sidecar plugins auto-installed on first kernel start. These ship with the
+/// shell so the out-of-box experience matches the README screenshots:
+/// dsh-better-sidebar gives the embedded UI a full workspace sidebar
+/// (file tree / editor / terminal / git).
+const SIDECAR_PLUGINS: &[&str] = &["dsh-better-sidebar"];
+
+/// Ensure every sidecar plugin is installed in the web profile. Idempotent:
+/// already-installed plugins are skipped. Safe to call before every kernel
+/// start — it only does work the first time. Never fails the start: an
+/// install error is logged and ignored so the kernel still comes up.
+pub async fn ensure_sidecar_plugins(
+    manager: &KernelManager,
+    app: &AppHandle,
+) -> Result<(), String> {
+    let profile = profile_dir();
+    if !profile.is_dir() {
+        // The web profile is created by the kernel on first boot; nothing to
+        // do until it exists. The next start after a kernel run will install.
+        eprintln!("[plugins] web profile missing, skipping sidecar install");
+        return Ok(());
+    }
+    let kernel_dir = manager.kernel_dir();
+    let Some(kernel_dir) = kernel_dir else {
+        eprintln!("[plugins] no kernel dir, skipping sidecar install");
+        return Ok(());
+    };
+    if !crate::kernel::is_kernel_dir(&kernel_dir) {
+        return Ok(());
+    }
+
+    // Which of the bundled plugins are missing from package.json deps?
+    let pkg_path = profile.join("package.json");
+    let pkg_raw = std::fs::read_to_string(&pkg_path).unwrap_or_default();
+    let deps: std::collections::HashSet<String> = serde_json::from_str::<Value>(&pkg_raw)
+        .ok()
+        .and_then(|v| v.get("dependencies").and_then(|d| d.as_object()).cloned())
+        .map(|d| d.keys().cloned().collect())
+        .unwrap_or_default();
+    let missing: Vec<&str> = SIDECAR_PLUGINS
+        .iter()
+        .copied()
+        .filter(|p| !deps.contains(*p))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // First-time setup for node-pty-style plugins: pnpm 11 blocks build
+    // scripts and freshly-published versions unless opted in. Write both
+    // grants directly (pnpm approve-builds is interactive, unusable here).
+    let ws_path = profile.join("pnpm-workspace.yaml");
+    let ws = std::fs::read_to_string(&ws_path).unwrap_or_default();
+    let mut changed = false;
+    if !ws.contains("allowBuilds:") {
+        std::fs::write(
+            &ws_path,
+            format!("{ws}\nallowBuilds:\n  node-pty: true\n"),
+        )
+        .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
+        changed = true;
+    }
+    if !ws.contains("minimumReleaseAgeExclude") {
+        let ws_now = std::fs::read_to_string(&ws_path).unwrap_or_default();
+        std::fs::write(
+            &ws_path,
+            format!("{ws_now}\nminimumReleaseAgeExclude:\n  - dsh-better-sidebar\n"),
+        )
+        .map_err(|e| format!("写入 pnpm-workspace.yaml 失败: {e}"))?;
+        changed = true;
+    }
+    if changed {
+        eprintln!("[plugins] patched pnpm-workspace.yaml for sidecar plugins");
+    }
+
+    // Install missing sidecar plugins one by one.
+    let (pnpm, path_env) = crate::kernel::resolve_toolchain().await?;
+    for name in &missing {
+        let _ = app.emit(
+            "kernel-log",
+            serde_json::json!({ "stream": "out", "line": format!("== 自动安装插件 {name} ==（首次启动，仅此一次）") }),
+        );
+        eprintln!("[plugins] installing sidecar {name}");
+        let r = crate::updater::run_streaming(
+            app,
+            &kernel_dir,
+            &path_env,
+            &pnpm,
+            &["dsh", "plugin", "--profile", "web", "add", name],
+        )
+        .await;
+        if let Err(e) = r {
+            eprintln!("[plugins] sidecar {name} install failed (ignored): {e}");
+            let _ = app.emit(
+                "kernel-log",
+                serde_json::json!({ "stream": "err", "line": format!("插件 {name} 自动安装失败: {e}") }),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
