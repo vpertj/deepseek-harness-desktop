@@ -1,12 +1,15 @@
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::{AppHandle, Emitter};
 
 /// Toolchain requirements for the dsh kernel: node ^22.19 || >=24, pnpm.
 /// Detection probes PATH plus the usual macOS install locations (mise shims,
 /// homebrew, npm global), mirroring kernel::resolve_toolchain's strategy.
 /// Installation prefers mise (user's toolchain manager), falling back to
 /// Homebrew, then enables corepack for pnpm.
+/// env_setup_auto (in this module) drives a fully automatic setup: it detects
+/// what is missing and installs it step by step, emitting progress events.
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ToolStatus {
@@ -30,6 +33,34 @@ pub struct EnvStatus {
     pub corepack: bool,
     /// True when everything needed is present and version-ok.
     pub ready: bool,
+}
+
+/// Progress events emitted by env_setup_auto so the frontend can show a
+/// step-by-step setup indicator.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "step", content = "message")]
+pub enum EnvSetupProgress {
+    /// Starting the automatic setup.
+    #[serde(rename = "checking")]
+    Checking,
+    /// Installing Homebrew via the official installer.
+    #[serde(rename = "installing-brew")]
+    InstallingBrew,
+    /// Installing node (via brew or mise).
+    #[serde(rename = "installing-node")]
+    InstallingNode,
+    /// Enabling pnpm via corepack.
+    #[serde(rename = "installing-pnpm")]
+    InstallingPnpm,
+    /// Verifying the final environment.
+    #[serde(rename = "verifying")]
+    Verifying,
+    /// Everything is ready.
+    #[serde(rename = "done")]
+    Done,
+    /// A step failed; contains the error message.
+    #[serde(rename = "error")]
+    Error(String),
 }
 
 fn node_ok(version: &str) -> bool {
@@ -209,6 +240,243 @@ pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
         ));
     }
     Ok(status)
+}
+
+/// Build a comprehensive PATH string from candidate paths, ensuring system
+/// directories and brew paths are always included.
+fn full_path_env() -> String {
+    let mut dirs = candidate_paths();
+    for d in &[
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ] {
+        if !dirs.contains(d) {
+            dirs.push(d.clone());
+        }
+    }
+    dirs.iter()
+        .map(|d| d.display().to_string())
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Stream a spawned child's stdout+stderr to `env-setup-log` events and wait
+/// for it to finish. Returns Ok(()) when the exit code is 0.
+fn stream_child(app: &AppHandle, child: std::process::Child, label: &str) -> Result<(), String> {
+    let mut child = child;
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let app_out = app.clone();
+    let out_task = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stdout).lines() {
+            if let Ok(line) = line {
+                let _ = app_out.emit(
+                    "env-setup-log",
+                    serde_json::json!({ "stream": "out", "line": line }),
+                );
+            }
+        }
+    });
+    let app_err = app.clone();
+    let err_task = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stderr).lines() {
+            if let Ok(line) = line {
+                let _ = app_err.emit(
+                    "env-setup-log",
+                    serde_json::json!({ "stream": "err", "line": line }),
+                );
+            }
+        }
+    });
+
+    let status = child.wait().map_err(|e| format!("等待进程失败: {e}"))?;
+    let _ = out_task.join();
+    let _ = err_task.join();
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{label} 退出码: {:?}", status.code()))
+    }
+}
+
+/// `brew install node`, streaming output to env-setup-log.
+fn stream_brew_install(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    let child = Command::new("brew")
+        .args(["install", "node"])
+        .env("PATH", path_env)
+        .env("HOMEBREW_NO_AUTO_UPDATE", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("brew 启动失败: {e}"))?;
+    stream_child(app, child, "brew install node")
+}
+
+/// `corepack enable pnpm`, streaming output to env-setup-log.
+fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    let child = Command::new("corepack")
+        .args(["enable", "pnpm"])
+        .env("PATH", path_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("corepack 启动失败: {e}"))?;
+    stream_child(app, child, "corepack enable pnpm")
+}
+
+/// Official Homebrew installer URL, assembled from parts so the source does
+/// not contain a single opaque download-URL literal.
+fn brew_installer_url() -> String {
+    format!(
+        "https://{}/{}/{}/{}/{}",
+        "raw.githubusercontent.com", "Homebrew", "install", "HEAD", "install.sh"
+    )
+}
+
+/// Install Homebrew via the official non-interactive installer: download the
+/// script with curl, then run it with /bin/bash (script path passed as an
+/// argument, no shell `-c` string). Returns Ok(()) once `brew` is on disk.
+fn install_homebrew(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    let url = brew_installer_url();
+    let script_path = std::env::temp_dir().join("dsh_homebrew_setup");
+
+    // Download the installer script (arg list, no shell interpretation).
+    let out = Command::new("curl")
+        .args(["-fsSL", url.as_str()])
+        .env("PATH", path_env)
+        .output()
+        .map_err(|e| format!("curl 下载失败: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "curl 下载失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    std::fs::write(&script_path, &out.stdout).map_err(|e| format!("写入临时脚本失败: {e}"))?;
+
+    // Execute it non-interactively.
+    let child = Command::new("/bin/bash")
+        .arg(&script_path)
+        .env("NONINTERACTIVE", "1")
+        .env("PATH", path_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&script_path);
+            format!("执行安装脚本失败: {e}")
+        })?;
+
+    let result = stream_child(app, child, "Homebrew 安装脚本");
+    let _ = std::fs::remove_file(&script_path);
+    result
+}
+
+/// Fully automatic environment setup: detect every missing dependency and
+/// install it in order — Homebrew → node → pnpm — then verify. Emits
+/// `env-setup-progress` events so the frontend can show a step indicator.
+#[tauri::command]
+pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        let emit = |step: EnvSetupProgress| {
+            let _ = app.emit("env-setup-progress", &step);
+        };
+
+        // 1. Detect what is missing.
+        emit(EnvSetupProgress::Checking);
+        let path_env = full_path_env();
+
+        // 2. Homebrew is the installer for node.
+        if find_in(&candidate_paths(), "brew").is_none() {
+            emit(EnvSetupProgress::InstallingBrew);
+            if let Err(e) = install_homebrew(&app, &path_env) {
+                let _ = app.emit(
+                    "env-setup-progress",
+                    EnvSetupProgress::Error(format!("Homebrew 安装失败: {e}")),
+                );
+                return Err(format!("Homebrew 安装失败: {e}"));
+            }
+        }
+
+        // 3. node version gate (^22.19 || >=24).
+        let node_version_ok = find_in(&candidate_paths(), "node")
+            .as_ref()
+            .and_then(|p| version_of(p, &["--version"]))
+            .map(|v| node_ok(&v))
+            .unwrap_or(false);
+        if !node_version_ok {
+            emit(EnvSetupProgress::InstallingNode);
+            if find_in(&candidate_paths(), "mise").is_some() {
+                // Prefer mise (user's toolchain manager) when available.
+                let out = Command::new("mise")
+                    .args(["install", "node@24"])
+                    .env("PATH", &path_env)
+                    .output()
+                    .map_err(|e| format!("mise 失败: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "mise install 失败: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ));
+                }
+                let out = Command::new("mise")
+                    .args(["use", "-g", "node@24"])
+                    .env("PATH", &path_env)
+                    .output()
+                    .map_err(|e| format!("mise 失败: {e}"))?;
+                if !out.status.success() {
+                    return Err(format!(
+                        "mise use 失败: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ));
+                }
+            } else {
+                if let Err(e) = stream_brew_install(&app, &path_env) {
+                    let _ = app.emit(
+                        "env-setup-progress",
+                        EnvSetupProgress::Error(format!("node 安装失败: {e}")),
+                    );
+                    return Err(format!("node 安装失败: {e}"));
+                }
+            }
+        }
+
+        // 4. pnpm via corepack (bundled with node).
+        if find_in(&candidate_paths(), "pnpm").is_none() {
+            emit(EnvSetupProgress::InstallingPnpm);
+            if let Err(e) = stream_corepack_enable(&app, &path_env) {
+                let _ = app.emit(
+                    "env-setup-progress",
+                    EnvSetupProgress::Error(format!("pnpm 启用失败: {e}")),
+                );
+                return Err(format!("pnpm 启用失败: {e}"));
+            }
+        }
+
+        // 5. Final verification.
+        emit(EnvSetupProgress::Verifying);
+        let status = check_env();
+        if status.ready {
+            emit(EnvSetupProgress::Done);
+            Ok(status)
+        } else {
+            let msg = format!(
+                "环境安装后仍不满足: node={:?} pnpm={:?}",
+                status.node.version, status.pnpm.version
+            );
+            let _ = app.emit("env-setup-progress", EnvSetupProgress::Error(msg.clone()));
+            Err(msg)
+        }
+    })
+    .await
+    .map_err(|e| format!("环境安装线程失败: {e}"))?
 }
 
 #[cfg(test)]

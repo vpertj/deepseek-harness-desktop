@@ -136,6 +136,26 @@ export function installEnv(): Promise<EnvStatusDto> {
   return invoke("install_env");
 }
 
+// ---- Automatic env setup (installs whatever is missing) --------------------
+
+export type EnvSetupStep =
+  | "checking"
+  | "installing-brew"
+  | "installing-node"
+  | "installing-pnpm"
+  | "verifying"
+  | "done"
+  | "error";
+
+export interface EnvSetupProgressEvent {
+  step: EnvSetupStep;
+  message?: string | null;
+}
+
+export function envSetupAuto(): Promise<EnvStatusDto> {
+  return invoke("env_setup_auto");
+}
+
 // ---- App settings ----------------------------------------------------------
 
 export interface SettingsDto {

@@ -50,6 +50,7 @@ pub fn run() {
             theme::get_theme,
             envcheck::check_env,
             envcheck::install_env,
+            envcheck::env_setup_auto,
             plugin::plugin_list,
             plugin::plugin_install,
             plugin::plugin_remove,

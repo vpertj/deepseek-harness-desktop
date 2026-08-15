@@ -12,6 +12,9 @@
   let toastKind = $state<"ok" | "err">("ok");
   let logBody: HTMLDivElement | undefined = $state();
   let envStatus: api.EnvStatusDto | null = $state(null);
+  let envSetupPhase: api.EnvSetupStep | null = $state(null);
+  let envSetupError: string | null = $state(null);
+  let envSetupRunning = $state(false);
   let appSettings: api.SettingsDto | null = $state(null);
   let plugins = $state<string[]>([]);
   let pluginName = $state("");
@@ -100,15 +103,22 @@
 
   async function start() {
     await run("start", async () => {
-      // Auto-install the toolchain if node/pnpm are missing or too old.
+      // Environment is installed automatically at launch; this is a guard for
+      // the case where setup is still in progress or failed silently.
       if (!envStatus?.ready) {
-        toast("检测到环境不完整，正在安装 Node.js / pnpm…");
+        if (envSetupRunning) {
+          return "环境准备中，请稍候…";
+        }
+        toast("检测到环境不完整，正在自动安装…");
         try {
-          envStatus = await api.installEnv();
+          envStatus = await api.envSetupAuto();
+          envSetupPhase = "done";
           if (!envStatus.ready) {
-            return "环境安装后仍不满足：node=" + (envStatus.node.version ?? "缺失") + " pnpm=" + (envStatus.pnpm.version ?? "缺失") + "（可尝试安装 mise 或 Homebrew 后重试）";
+            return "环境安装后仍不满足：node=" + (envStatus.node.version ?? "缺失") + " pnpm=" + (envStatus.pnpm.version ?? "缺失");
           }
         } catch (e) {
+          envSetupPhase = "error";
+          envSetupError = String(e);
           return String(e);
         }
       }
@@ -121,6 +131,43 @@
       }
       return err;
     });
+  }
+
+  const envStepOrder = ["checking", "installing-brew", "installing-node", "installing-pnpm", "verifying"];
+  const envStepLabels: Record<string, string> = {
+    checking: "检测环境",
+    "installing-brew": "安装 Homebrew",
+    "installing-node": "安装 node",
+    "installing-pnpm": "安装 pnpm",
+    verifying: "验证完成",
+  };
+  const envSteps = $derived(Object.entries(envStepLabels).map(([id, label]) => ({ id, label })));
+
+  function envStepState(id: string): "done" | "active" | "pending" {
+    if (!envSetupPhase) return "pending";
+    const cur = envStepOrder.indexOf(envSetupPhase);
+    const idx = envStepOrder.indexOf(id);
+    if (idx < cur) return "done";
+    if (idx === cur) return "active";
+    return "pending";
+  }
+
+  async function runEnvSetup() {
+    if (envSetupRunning) return;
+    envSetupRunning = true;
+    envSetupPhase = "checking";
+    envSetupError = null;
+    try {
+      envStatus = await api.envSetupAuto();
+      envSetupPhase = "done";
+      toast("环境已就绪", "ok");
+    } catch (e) {
+      envSetupPhase = "error";
+      envSetupError = String(e);
+      toast(String(e), "err");
+    } finally {
+      envSetupRunning = false;
+    }
   }
 
   async function stop() {
@@ -277,7 +324,13 @@
       console.error("wireEvents failed", e);
     }
     s.refreshStatus().catch((e) => console.error("refreshStatus failed", e));
-    api.checkEnv().then((e) => (envStatus = e)).catch((e) => console.error("checkEnv failed", e));
+    api.checkEnv()
+      .then((e) => {
+        envStatus = e;
+        // Fully automatic setup: install whatever is missing, right at launch.
+        if (!e.ready) void runEnvSetup();
+      })
+      .catch((e) => console.error("checkEnv failed", e));
     api.getSettings().then((st) => (appSettings = st)).catch((e) => console.error("getSettings failed", e));
     syncTheme();
     // Auto-check for kernel updates shortly after launch (needs kernel dir),
@@ -303,7 +356,17 @@
             s.store.kernel.kernelDir &&
             s.store.kernel.status.state === "stopped"
           ) {
-            await s.startKernel();
+            // Wait for the automatic env setup to finish before starting the
+            // kernel (installing node/brew can take minutes on first launch).
+            const deadline = Date.now() + 10 * 60 * 1000;
+            while (!envStatus?.ready && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, 500));
+            }
+            if (envStatus?.ready) {
+              await s.startKernel();
+            } else {
+              console.warn("auto-start skipped: 环境未就绪");
+            }
           }
         } catch (e) {
           console.error("auto-start failed", e);
@@ -325,11 +388,18 @@
       const p = e.payload as { phase?: string; percent?: number };
       if (p.phase) appUpdatePhase = p.phase === "ready" ? "ready" : p.phase;
     });
+    const unEnv = listen("env-setup-progress", (e) => {
+      const p = e.payload as api.EnvSetupProgressEvent;
+      if (!p) return;
+      envSetupPhase = p.step;
+      if (p.step === "error") envSetupError = p.message ?? String(e.payload);
+    });
     return () => {
       clearInterval(themeTimer);
       clearInterval(updateTimer);
       un.then((fn) => fn()).catch(() => {});
       unProg.then((fn) => fn()).catch(() => {});
+      unEnv.then((fn) => fn()).catch(() => {});
     };
   });
 
@@ -397,12 +467,29 @@
         <div class="welcome-inner">
           <h1>DeepSeek Harness</h1>
 
-          {#if envStatus}
+          {#if envSetupPhase && envSetupPhase !== "done" && envSetupPhase !== "error"}
+            <div class="env-steps" aria-label="环境自动安装进度">
+              {#each envSteps as step (step.id)}
+                {@const st = envStepState(step.id)}
+                <div class="env-step" class:st-done={st === "done"} class:st-active={st === "active"}>
+                  <span class="env-step-badge">
+                    {#if st === "done"}✓{:else if st === "active"}<span class="env-step-spinner"></span>{:else}○{/if}
+                  </span>
+                  <span class="env-step-label">{step.label}</span>
+                </div>
+              {/each}
+              {#if envSetupError}
+                <p class="env-step-error">{envSetupError}</p>
+              {/if}
+            </div>
+          {:else if envStatus}
             <p class={`env-status ${envStatus.ready ? "env-ok" : "env-warn"}`}>
               {#if envStatus.ready}
                 Node {envStatus.node.version} · pnpm {envStatus.pnpm.version}
+              {:else if envSetupError}
+                环境安装失败：{envSetupError}
               {:else}
-                需要 Node.js ≥ 22.19 与 pnpm，启动内核时将自动安装（检测到 {envStatus.mise ? "mise" : envStatus.brew ? "Homebrew" : "无安装器"}）
+                需要 Node ≥ 22.19 与 pnpm，启动内核时将自动安装
               {/if}
             </p>
           {/if}
@@ -822,6 +909,65 @@
   }
   .env-warn {
     color: #fbbf24;
+  }
+  .env-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+    min-width: 320px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .env-step {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-faint);
+  }
+  .env-step.st-done {
+    color: rgba(52, 211, 153, 0.9);
+  }
+  .env-step.st-active {
+    color: var(--text);
+  }
+  .env-step-badge {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    background: var(--btn-bg);
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .env-step.st-done .env-step-badge {
+    background: rgba(52, 211, 153, 0.15);
+    border-color: rgba(52, 211, 153, 0.4);
+    color: #34d399;
+  }
+  .env-step.st-active .env-step-badge {
+    background: rgba(103, 158, 254, 0.15);
+    border-color: rgba(103, 158, 254, 0.5);
+  }
+  .env-step-spinner {
+    display: block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid rgba(103, 158, 254, 0.3);
+    border-top-color: var(--accent);
+    animation: boot-spin 0.8s linear infinite;
+  }
+  .env-step-error {
+    color: #fca5a5;
+    font-size: 12px;
+    margin: 4px 0 0;
   }
   .boot {
     display: flex;
