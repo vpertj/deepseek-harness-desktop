@@ -53,12 +53,17 @@ npm run tauri build
 #   src-tauri/target/release/bundle/dmg/deepseek-harness-desktop_0.1.0_aarch64.dmg
 ```
 
+## Installation
+
+Download the dmg from [Releases](https://github.com/vpertj/deepseek-harness-desktop/releases), open it and drag the app into **Applications**.
+
+> **First launch only**: the app is ad-hoc signed (free, no paid Developer ID), so macOS shows *"cannot verify the developer"* once. Right-click the app → **Open** → **Open** to launch it the first time. The app then removes its download flag automatically — every later launch opens directly with no prompts (kernel auto-install, auto-update etc. stay fully automatic).
+
 ## Usage
 
-1. On first launch: in **Settings**, either point to an existing kernel directory (a deepseek-harness checkout) or use **Install Kernel Online** (auto git clone into the app data directory)
-2. Click **Start Kernel** — a free port is assigned automatically and the web UI loads once the service is ready
-3. In the embedded UI, go to Settings → Models, enter your DeepSeek API key, pick a workspace, and start a conversation
-4. Kernel updates: with the kernel stopped, click **Check Update**; if a new version exists, click **Update Now** (git pull + pnpm install + build, with live logs)
+1. On first launch: everything is automatic — missing runtime tools (node / pnpm) are installed, the kernel is downloaded, built and started, and the web UI opens by itself
+2. In the embedded UI, go to Settings → Models, enter your DeepSeek API key, pick a workspace, and start a conversation
+3. Kernel updates: with the kernel stopped, click **Check Update**; if a new version exists, click **Update Now** (git pull + pnpm install + build, with live logs)
 
 Prerequisites (for online install / kernel start): Node.js ≥ 22 and pnpm (`corepack enable pnpm` or `npm i -g pnpm`).
 

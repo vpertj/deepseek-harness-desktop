@@ -11,8 +11,39 @@ mod updater;
 
 use kernel::KernelManager;
 
+/// Remove Gatekeeper quarantine from our own .app bundle. The app is signed
+/// ad-hoc (no paid Developer ID), so the first launch after download requires
+/// a right-click → Open. Once it runs, clearing the quarantine flag makes
+/// every later launch open directly with no prompts. Runs on a background
+/// thread a few seconds after startup, because the bundle is briefly locked
+/// while the process is still loading.
+fn clear_own_quarantine() {
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let Ok(exe) = std::env::current_exe() else {
+            eprintln!("[quarantine] current_exe failed");
+            return;
+        };
+        let mut dir = exe.parent();
+        while let Some(d) = dir {
+            if d.extension().map(|e| e == "app").unwrap_or(false) {
+                eprintln!("[quarantine] clearing on {}", d.display());
+                let out = std::process::Command::new("xattr")
+                    .args(["-dr", "com.apple.quarantine"])
+                    .arg(d)
+                    .output();
+                eprintln!("[quarantine] xattr result: {out:?}");
+                return;
+            }
+            dir = d.parent();
+        }
+        eprintln!("[quarantine] no .app dir found");
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    clear_own_quarantine();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
