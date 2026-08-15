@@ -43,10 +43,7 @@ pub enum EnvSetupProgress {
     /// Starting the automatic setup.
     #[serde(rename = "checking")]
     Checking,
-    /// Installing Homebrew via the official installer.
-    #[serde(rename = "installing-brew")]
-    InstallingBrew,
-    /// Installing node (via brew or mise).
+    /// Installing node (via brew, mise or official tarball).
     #[serde(rename = "installing-node")]
     InstallingNode,
     /// Enabling pnpm via corepack.
@@ -89,6 +86,7 @@ fn candidate_paths() -> Vec<PathBuf> {
         home.join(".local/share/mise/shims"),
         home.join(".local/share/mise/bin"),
         home.join(".local/bin"),
+        home.join(".dsh/node/current/bin"),
         home.join(".nvm/current/bin"),
         home.join(".npm-global/bin"),
         home.join(".volta/bin"),
@@ -357,52 +355,69 @@ fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String>
     }
 }
 
-/// Official Homebrew installer URL, assembled from parts so the source does
+/// Official node macOS tarball URL, assembled from parts so the source does
 /// not contain a single opaque download-URL literal.
-fn brew_installer_url() -> String {
+fn node_tarball_url(arch: &str) -> String {
     format!(
-        "https://{}/{}/{}/{}/{}",
-        "raw.githubusercontent.com", "Homebrew", "install", "HEAD", "install.sh"
+        "https://{}/{}/{}/{}-darwin-{}.{}",
+        "nodejs.org", "dist", "v22.19.0", "node-v22.19.0", arch, "tar.gz"
     )
 }
 
-/// Install Homebrew via the official non-interactive installer: download the
-/// script with curl, then run it with /bin/bash (script path passed as an
-/// argument, no shell `-c` string). Returns Ok(()) once `brew` is on disk.
-fn install_homebrew(app: &AppHandle, path_env: &str) -> Result<(), String> {
-    let url = brew_installer_url();
-    let script_path = std::env::temp_dir().join("dsh_homebrew_setup");
+/// Install node on a blank machine (no brew, no mise) by downloading the
+/// official macOS tarball into ~/.dsh/node. Needs no sudo. `current` is a
+/// symlink to the extracted dir so future versions can swap it.
+fn install_node_tarball(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let node_root = home.join(".dsh").join("node");
+    let arch = if std::env::consts::ARCH == "x86_64" { "x64" } else { "arm64" };
+    let url = node_tarball_url(arch);
+    let tarball = node_root.join("node.tar.gz");
 
-    // Download the installer script (arg list, no shell interpretation).
+    std::fs::create_dir_all(&node_root).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    // Download the tarball (arg list, no shell interpretation).
     let out = Command::new("curl")
-        .args(["-fsSL", url.as_str()])
+        .args(["-fsSL", url.as_str(), "-o", tarball.to_str().unwrap()])
         .env("PATH", path_env)
         .output()
-        .map_err(|e| format!("curl 下载失败: {e}"))?;
+        .map_err(|e| format!("curl 下载 node 失败: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "curl 下载失败: {}",
+            "下载 node 失败: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    std::fs::write(&script_path, &out.stdout).map_err(|e| format!("写入临时脚本失败: {e}"))?;
 
-    // Execute it non-interactively.
-    let child = Command::new("/bin/bash")
-        .arg(&script_path)
-        .env("NONINTERACTIVE", "1")
-        .env("PATH", path_env)
+    // Extract into ~/.dsh/node.
+    let child = Command::new("tar")
+        .args(["-xzf", tarball.to_str().unwrap(), "-C", node_root.to_str().unwrap()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&script_path);
-            format!("执行安装脚本失败: {e}")
-        })?;
+        .map_err(|e| format!("tar 解压失败: {e}"))?;
+    if let Err(e) = stream_child(app, child, "tar 解压") {
+        let _ = std::fs::remove_file(&tarball);
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(&tarball);
 
-    let result = stream_child(app, child, "Homebrew 安装脚本");
-    let _ = std::fs::remove_file(&script_path);
-    result
+    // Point current -> node-v22.19.0-darwin-<arch>.
+    let extracted = node_root.join(format!("node-v22.19.0-darwin-{arch}"));
+    let current = node_root.join("current");
+    let _ = std::fs::remove_file(&current);
+    if current.exists() {
+        let _ = std::fs::remove_dir_all(&current);
+    }
+    std::os::unix::fs::symlink(&extracted, &current)
+        .map_err(|e| format!("创建 current 链接失败: {e}"))?;
+
+    let node_bin = current.join("bin").join("node");
+    if !node_bin.is_file() {
+        return Err("node 解压后未找到可执行文件".into());
+    }
+    eprintln!("[env] node installed at {}", node_bin.display());
+    Ok(())
 }
 
 /// Fully automatic environment setup: detect every missing dependency and
@@ -419,19 +434,9 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
         emit(EnvSetupProgress::Checking);
         let path_env = full_path_env();
 
-        // 2. Homebrew is the installer for node.
-        if find_in(&candidate_paths(), "brew").is_none() {
-            emit(EnvSetupProgress::InstallingBrew);
-            if let Err(e) = install_homebrew(&app, &path_env) {
-                let _ = app.emit(
-                    "env-setup-progress",
-                    EnvSetupProgress::Error(format!("Homebrew 安装失败: {e}")),
-                );
-                return Err(format!("Homebrew 安装失败: {e}"));
-            }
-        }
-
-        // 3. node version gate (^22.19 || >=24).
+        // 2. node version gate (^22.19 || >=24). Installers tried in order:
+        //    mise (user's toolchain manager) → brew → official tarball. The
+        //    tarball path works on a blank machine and needs no sudo.
         let node_version_ok = find_in(&candidate_paths(), "node")
             .as_ref()
             .and_then(|p| version_of(p, &["--version"]))
@@ -440,7 +445,6 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
         if !node_version_ok {
             emit(EnvSetupProgress::InstallingNode);
             if find_in(&candidate_paths(), "mise").is_some() {
-                // Prefer mise (user's toolchain manager) when available.
                 let out = Command::new("mise")
                     .args(["install", "node@24"])
                     .env("PATH", &path_env)
@@ -463,8 +467,16 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
                         String::from_utf8_lossy(&out.stderr).trim()
                     ));
                 }
-            } else {
+            } else if find_in(&candidate_paths(), "brew").is_some() {
                 if let Err(e) = stream_brew_install(&app, &path_env) {
+                    let _ = app.emit(
+                        "env-setup-progress",
+                        EnvSetupProgress::Error(format!("node 安装失败: {e}")),
+                    );
+                    return Err(format!("node 安装失败: {e}"));
+                }
+            } else {
+                if let Err(e) = install_node_tarball(&app, &path_env) {
                     let _ = app.emit(
                         "env-setup-progress",
                         EnvSetupProgress::Error(format!("node 安装失败: {e}")),

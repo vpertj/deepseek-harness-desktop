@@ -133,10 +133,9 @@
     });
   }
 
-  const envStepOrder = ["checking", "installing-brew", "installing-node", "installing-pnpm", "verifying"];
+  const envStepOrder = ["checking", "installing-node", "installing-pnpm", "verifying"];
   const envStepLabels: Record<string, string> = {
     checking: "检测环境",
-    "installing-brew": "安装 Homebrew",
     "installing-node": "安装 node",
     "installing-pnpm": "安装 pnpm",
     verifying: "验证完成",
@@ -167,6 +166,48 @@
       toast(String(e), "err");
     } finally {
       envSetupRunning = false;
+    }
+  }
+
+  /// One-shot first-run flow: make sure the runtime env is ready, install the
+  /// kernel if none is configured, then start it so the main UI shows up.
+  async function bootstrap() {
+    try {
+      // 1. Environment: auto-install anything that's missing.
+      if (!envStatus?.ready) {
+        await runEnvSetup();
+      }
+      if (!envStatus?.ready) {
+        console.warn("bootstrap skipped: 环境未就绪");
+        return;
+      }
+
+      // 2. Kernel: auto-install when none is configured or the configured dir
+      // is invalid (revision is null when the dir is not a git checkout).
+      await s.refreshStatus();
+      if (!s.store.kernel.kernelDir || !s.store.kernel.revision) {
+        toast("环境已就绪，正在自动安装内核…");
+        s.store.logPanelOpen = true;
+        s.appendLog("out", "== 自动安装内核（首次运行）==");
+        const err = await s.installKernel();
+        if (err) {
+          toast("内核自动安装失败", "err");
+          s.appendLog("err", `内核安装失败: ${err}`);
+          return;
+        }
+        toast("内核安装完成，正在启动…");
+      }
+
+      // 3. Start the kernel (if not already running).
+      if (s.store.kernel.status.state === "stopped") {
+        const err = await s.startKernel();
+        if (err) {
+          s.appendLog("err", `启动失败: ${err}`);
+          s.store.logPanelOpen = true;
+        }
+      }
+    } catch (e) {
+      console.error("bootstrap failed", e);
     }
   }
 
@@ -324,13 +365,7 @@
       console.error("wireEvents failed", e);
     }
     s.refreshStatus().catch((e) => console.error("refreshStatus failed", e));
-    api.checkEnv()
-      .then((e) => {
-        envStatus = e;
-        // Fully automatic setup: install whatever is missing, right at launch.
-        if (!e.ready) void runEnvSetup();
-      })
-      .catch((e) => console.error("checkEnv failed", e));
+    api.checkEnv().then((e) => (envStatus = e)).catch((e) => console.error("checkEnv failed", e));
     api.getSettings().then((st) => (appSettings = st)).catch((e) => console.error("getSettings failed", e));
     syncTheme();
     // Auto-check for kernel updates shortly after launch (needs kernel dir),
@@ -341,38 +376,8 @@
     updateTimer = setInterval(() => {
       if (s.store.kernel.kernelDir) void s.checkUpdate();
     }, 30 * 60 * 1000);
-    // Auto-start the kernel the moment the initial refresh settles (no fixed
-    // delay): status + settings + env check all finish in well under a second,
-    // then startKernel runs immediately. Update check runs on its own timer.
-    setTimeout(() => {
-      void (async () => {
-        try {
-          // Never let one failing probe block the auto-start: allSettled waits
-          // for every call, then we re-read settings as the source of truth.
-          await Promise.allSettled([s.refreshStatus(), api.getSettings(), api.checkEnv()]);
-          const st = await api.getSettings();
-          if (
-            st.auto_start &&
-            s.store.kernel.kernelDir &&
-            s.store.kernel.status.state === "stopped"
-          ) {
-            // Wait for the automatic env setup to finish before starting the
-            // kernel (installing node/brew can take minutes on first launch).
-            const deadline = Date.now() + 10 * 60 * 1000;
-            while (!envStatus?.ready && Date.now() < deadline) {
-              await new Promise((r) => setTimeout(r, 500));
-            }
-            if (envStatus?.ready) {
-              await s.startKernel();
-            } else {
-              console.warn("auto-start skipped: 环境未就绪");
-            }
-          }
-        } catch (e) {
-          console.error("auto-start failed", e);
-        }
-      })();
-    }, 400);
+    // Full automatic bootstrap: env setup → kernel install → auto start.
+    void bootstrap();
     // Auto-check for app (shell) updates shortly after launch.
     setTimeout(() => {
       void checkAppUpdate(false);
