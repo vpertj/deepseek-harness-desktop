@@ -294,6 +294,12 @@ impl KernelManager {
     /// Spawn `pnpm dsh web --port <free>` inside the kernel dir and stream
     /// its output to the frontend. Returns the chosen port.
     pub async fn start(&self, app: &AppHandle) -> Result<u16, String> {
+        // Take over any dsh web instance the user started outside this app
+        // (own terminal, scripts, other tools) before spawning ours.
+        let taken = kill_external_dsh_web();
+        if taken > 0 {
+            eprintln!("[kernel] 接管 {taken} 个外部 dsh web 实例");
+        }
         let mut inner = self.inner.lock().await;
         if matches!(inner.status, KernelStatus::Running { .. } | KernelStatus::Starting) {
             return Err("内核已在运行".to_string());
@@ -363,6 +369,10 @@ impl KernelManager {
             }
             if healthy {
                 sup_shared.lock().await.status = KernelStatus::Running { port };
+                // Point the shell proxy at this kernel and make sure the
+                // proxy listener is up (the iframe loads the proxy port).
+                crate::proxy::set_kernel_port(port);
+                let _ = crate::proxy::ensure_started(app_sup.clone());
                 crate::tray::refresh_menu(&app_sup);
                 let _ = app_sup.emit(
                     "kernel-status",
@@ -410,6 +420,7 @@ impl KernelManager {
 
     /// Terminate the kernel process group (SIGTERM, then SIGKILL after 5s).
     pub async fn stop(&self) -> Result<(), String> {
+        crate::proxy::set_kernel_port(0);
         let mut inner = self.inner.lock().await;
         let Some(mut child) = inner.child.take() else {
             inner.status = KernelStatus::Stopped;
@@ -459,9 +470,10 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(format!(
-            "cd '{}' && exec '{}' dsh web --port {port}",
+            "cd '{}' && exec '{}' dsh web --port {port} --trusted-host 127.0.0.1:{}",
             dir.display(),
-            pnpm
+            pnpm,
+            crate::proxy::PROXY_PORT
         ))
         .env("PATH", &path_env)
         .env("DSH_DESKTOP_OWNED", "1")
@@ -499,6 +511,17 @@ async fn tcp_probe(port: u16) -> bool {
 #[tauri::command]
 pub async fn kernel_status(manager: tauri::State<'_, KernelManager>) -> Result<KernelInfo, String> {
     Ok(manager.status().await)
+}
+
+/// Open the app's native folder picker. Used by the shell to let the user
+/// pick a workspace directory without relying on the kernel's osascript
+/// dialog (which cannot show in this embedded environment). The shell then
+/// creates the workspace through the kernel's own HTTP API.
+#[tauri::command]
+pub async fn pick_workspace_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app.dialog().file().blocking_pick_folder();
+    Ok(picked.map(|p| p.to_string()))
 }
 
 #[tauri::command]
@@ -652,6 +675,73 @@ pub fn kill_stale_owned() {
             .output();
         eprintln!("[kernel] killed stale kernel pid {pid}");
     }
+}
+
+/// Stop `dsh web` instances the user started outside this app (terminal,
+/// scripts, other tools) so the shell takes over the single kernel. Owned
+/// instances (tagged DSH_DESKTOP_OWNED) and this process are skipped.
+/// Kills the whole process tree (pnpm wrapper + node child), not just the
+/// matched parent. Returns the number of processes stopped.
+pub fn kill_external_dsh_web() -> usize {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["axo", "pid=,ppid=,command=", "-E"])
+        .output()
+    else {
+        return 0;
+    };
+    let mut procs: Vec<(i32, i32, String)> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut parts = line.trim().splitn(3, char::is_whitespace);
+        let (Some(p), Some(pp), Some(cmd)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Ok(pid), Ok(ppid)) = (p.parse::<i32>(), pp.parse::<i32>()) {
+            procs.push((pid, ppid, cmd.to_string()));
+        }
+    }
+
+    // Root targets: user-started dsh web processes.
+    let mut all: Vec<i32> = Vec::new();
+    for (pid, _, cmd) in &procs {
+        if cmd.contains("DSH_DESKTOP_OWNED") {
+            continue;
+        }
+        // Skip only grep processes from the ps pipeline itself (a bare
+        // substring check would also drop legit env vars like .../ugrep).
+        if cmd.split_whitespace().next().unwrap_or("").contains("grep") {
+            continue;
+        }
+        if cmd.contains("dsh web") || cmd.contains("bin.ts web") {
+            if *pid > 1 && *pid != std::process::id() as i32 {
+                all.push(*pid);
+            }
+        }
+    }
+    // Expand to every descendant so the pnpm wrapper's node child dies too.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (pid, ppid, _) in &procs {
+            if all.contains(ppid) && !all.contains(pid) {
+                all.push(*pid);
+                changed = true;
+            }
+        }
+    }
+
+    let mut killed = 0;
+    // Children first, parents last.
+    for pid in all.iter().rev() {
+        if *pid <= 1 || *pid == std::process::id() as i32 {
+            continue;
+        }
+        unsafe {
+            libc::kill(*pid, libc::SIGTERM);
+        }
+        killed += 1;
+        eprintln!("[kernel] 接管: 停止外部 dsh web pid {pid}");
+    }
+    killed
 }
 
 #[cfg(test)]

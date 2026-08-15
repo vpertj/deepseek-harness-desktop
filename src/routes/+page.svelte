@@ -34,9 +34,13 @@
     });
   });
 
+  // The iframe loads the shell proxy (fixed port 54001), which forwards
+  // everything to the kernel but serves host.pickDirectory with the app's
+  // native dialog (the kernel's osascript chooser cannot show in-process).
+  const PROXY_PORT = 54001;
   const iframeUrl = $derived(
     s.store.kernel.status.state === "running"
-      ? `http://127.0.0.1:${(s.store.kernel.status as { state: "running"; port: number }).port}`
+      ? `http://127.0.0.1:${PROXY_PORT}`
       : null,
   );
 

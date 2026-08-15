@@ -4,6 +4,7 @@ mod envcheck;
 mod kernel;
 mod logfile;
 mod plugin;
+mod proxy;
 mod settings;
 mod theme;
 mod tray;
@@ -65,6 +66,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             kernel::kernel_status,
+            kernel::pick_workspace_dir,
             kernel::kernel_set_dir,
             kernel::kernel_start,
             kernel::kernel_stop,
