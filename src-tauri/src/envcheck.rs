@@ -322,6 +322,7 @@ fn stream_brew_install(app: &AppHandle, path_env: &str) -> Result<(), String> {
 /// writable by the current user, falls back to ~/.local/bin (already in
 /// candidate_paths), which needs no sudo.
 fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    eprintln!("[env] corepack enable (default dir)…");
     let child = Command::new("corepack")
         .args(["enable", "pnpm"])
         .env("PATH", path_env)
@@ -330,14 +331,19 @@ fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String>
         .spawn()
         .map_err(|e| format!("corepack 启动失败: {e}"))?;
     match stream_child(app, child, "corepack enable pnpm") {
-        Ok(()) => Ok(()),
-        Err(_e) => {
+        Ok(()) => {
+            eprintln!("[env] corepack enable (default dir) OK");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[env] corepack enable (default dir) failed: {e}");
             // Permission denied (node installed under a root-owned dir such as
             // /usr/local/bin): install the pnpm shim into the user's own dir.
             let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
             let install_dir = home.join(".local").join("bin");
             std::fs::create_dir_all(&install_dir)
                 .map_err(|e| format!("创建 ~/.local/bin 失败: {e}"))?;
+            eprintln!("[env] corepack enable --install-directory {}…", install_dir.display());
             let child = Command::new("corepack")
                 .args([
                     "enable",
@@ -350,8 +356,55 @@ fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String>
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .map_err(|e| format!("corepack 启动失败: {e}"))?;
-            stream_child(app, child, "corepack enable pnpm (user dir)")
+            let r = stream_child(app, child, "corepack enable pnpm (user dir)");
+            eprintln!("[env] corepack enable user-dir result: {r:?}");
+            r
         }
+    }
+}
+
+/// Make sure a usable pnpm exists, trying several installers in order and
+/// verifying the actual file after each step:
+///   1. corepack enable (node's dir)
+///   2. corepack enable --install-directory ~/.local/bin
+///   3. npm install -g pnpm --prefix ~/.npm-global  (npm ships with node, so
+///      this also works on a blank machine)
+/// corepack can report success without producing the shim (permission,
+/// cache or environment quirks), so only a real file check counts.
+fn ensure_pnpm(app: &AppHandle, path_env: &str) -> Result<(), String> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let npm_global = home.join(".npm-global");
+
+    let mut ok = find_in(&candidate_paths(), "pnpm").is_some();
+    if !ok {
+        // 1 + 2: corepack (default dir, then user dir fallback inside).
+        let _ = stream_corepack_enable(app, path_env);
+        ok = find_in(&candidate_paths(), "pnpm").is_some();
+    }
+    if !ok {
+        // 3: npm install -g pnpm into the user's own prefix (no sudo).
+        eprintln!("[env] pnpm: npm install -g pnpm --prefix {}", npm_global.display());
+        let _ = std::fs::create_dir_all(&npm_global);
+        let child = Command::new("npm")
+            .args([
+                "install",
+                "-g",
+                "pnpm",
+                "--prefix",
+                npm_global.to_str().unwrap_or(".npm-global"),
+            ])
+            .env("PATH", path_env)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("npm 启动失败: {e}"))?;
+        let _ = stream_child(app, child, "npm install -g pnpm");
+        ok = find_in(&candidate_paths(), "pnpm").is_some();
+    }
+    if ok {
+        Ok(())
+    } else {
+        Err("pnpm 安装失败：corepack 与 npm 均未能安装成功".into())
     }
 }
 
@@ -433,6 +486,7 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
         // 1. Detect what is missing.
         emit(EnvSetupProgress::Checking);
         let path_env = full_path_env();
+        eprintln!("[env] setup start, PATH={}", path_env.chars().take(120).collect::<String>());
 
         // 2. node version gate (^22.19 || >=24). Installers tried in order:
         //    mise (user's toolchain manager) → brew → official tarball. The
@@ -486,10 +540,11 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
             }
         }
 
-        // 4. pnpm via corepack (bundled with node).
+        // 4. pnpm (corepack → npm fallback, each step file-verified).
         if find_in(&candidate_paths(), "pnpm").is_none() {
+            eprintln!("[env] pnpm missing, installing…");
             emit(EnvSetupProgress::InstallingPnpm);
-            if let Err(e) = stream_corepack_enable(&app, &path_env) {
+            if let Err(e) = ensure_pnpm(&app, &path_env) {
                 let _ = app.emit(
                     "env-setup-progress",
                     EnvSetupProgress::Error(format!("pnpm 启用失败: {e}")),
