@@ -292,6 +292,11 @@ fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> 
 
 /// Serve `host.pickDirectory` with the app's native folder picker, answering
 /// the same RPC envelope the kernel would produce.
+///
+/// The dialog MUST run on the main thread: macOS AppKit dialogs fail
+/// silently when opened from a background thread (the proxy handler thread
+/// is one), so we hop to the main thread via `run_on_main_thread` and wait
+/// on a channel for the result.
 fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Result<(), String> {
     let mut body = Vec::new();
     request
@@ -303,12 +308,27 @@ fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Re
         .and_then(|v| v.get("rpcId").and_then(|r| r.as_str()).map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
 
-    let picked = {
-        use tauri_plugin_dialog::DialogExt;
-        app.dialog().file().blocking_pick_folder()
-    };
+    // Hop to the main thread for the dialog; wait up to 2 minutes for the
+    // user to pick or cancel. If the hop itself fails (app shutting down),
+    // answer with null so the kernel UI treats it as a cancellation.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let app_for_main = app.clone();
+    if app
+        .run_on_main_thread(move || {
+            use tauri_plugin_dialog::DialogExt;
+            let picked = app_for_main.dialog().file().blocking_pick_folder();
+            let _ = tx.send(picked.map(|p| p.to_string()));
+        })
+        .is_err()
+    {
+        eprintln!("[proxy] run_on_main_thread failed for pickDirectory");
+    }
+    let picked = rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .unwrap_or(None);
+
     let value = match &picked {
-        Some(p) => serde_json::json!({ "path": p.to_string() }),
+        Some(p) => serde_json::json!({ "path": p }),
         None => serde_json::json!({ "path": null }),
     };
     let payload = serde_json::json!({
