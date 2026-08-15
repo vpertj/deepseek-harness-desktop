@@ -320,6 +320,9 @@ fn stream_brew_install(app: &AppHandle, path_env: &str) -> Result<(), String> {
 }
 
 /// `corepack enable pnpm`, streaming output to env-setup-log.
+/// If the default install directory (node's dir, e.g. /usr/local/bin) is not
+/// writable by the current user, falls back to ~/.local/bin (already in
+/// candidate_paths), which needs no sudo.
 fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String> {
     let child = Command::new("corepack")
         .args(["enable", "pnpm"])
@@ -328,7 +331,30 @@ fn stream_corepack_enable(app: &AppHandle, path_env: &str) -> Result<(), String>
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("corepack 启动失败: {e}"))?;
-    stream_child(app, child, "corepack enable pnpm")
+    match stream_child(app, child, "corepack enable pnpm") {
+        Ok(()) => Ok(()),
+        Err(_e) => {
+            // Permission denied (node installed under a root-owned dir such as
+            // /usr/local/bin): install the pnpm shim into the user's own dir.
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            let install_dir = home.join(".local").join("bin");
+            std::fs::create_dir_all(&install_dir)
+                .map_err(|e| format!("创建 ~/.local/bin 失败: {e}"))?;
+            let child = Command::new("corepack")
+                .args([
+                    "enable",
+                    "pnpm",
+                    "--install-directory",
+                    install_dir.to_str().unwrap_or(".local/bin"),
+                ])
+                .env("PATH", path_env)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("corepack 启动失败: {e}"))?;
+            stream_child(app, child, "corepack enable pnpm (user dir)")
+        }
+    }
 }
 
 /// Official Homebrew installer URL, assembled from parts so the source does
