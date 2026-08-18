@@ -147,7 +147,7 @@ pub fn check_env() -> EnvStatus {
 
     let (node, node_path) = match &node_bin {
         Some(p) => {
-            let (st, v) = tool_status(p, &["--version"], node_ok);
+            let (st, _v) = tool_status(p, &["--version"], node_ok);
             (st, Some(p.display().to_string()))
         }
         None => (ToolStatus { present: false, version: None, ok: false }, None),
@@ -181,9 +181,8 @@ pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
     let mise = find_in(&dirs, "mise");
     let brew = find_in(&dirs, "brew");
 
-    let mut installed_anything = false;
-
-    if let Some(mise_bin) = mise {
+    if mise.is_some() {
+        let mise_bin = mise.unwrap();
         eprintln!("[env] installing node@24 via mise");
         let out = Command::new(&mise_bin)
             .args(["install", "node@24"])
@@ -205,7 +204,6 @@ pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        installed_anything = true;
     } else if let Some(brew_bin) = brew {
         eprintln!("[env] installing node via homebrew");
         let out = Command::new(&brew_bin)
@@ -218,24 +216,21 @@ pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        installed_anything = true;
     } else {
         return Err("未找到 mise 或 Homebrew，无法自动安装 Node.js。请手动安装后重试。".into());
     }
 
-    if installed_anything {
-        // pnpm via corepack (bundled with node). Pass the full candidate PATH
-        // so the corepack shim can find node (GUI apps get a minimal PATH).
-        if let Some(corepack_bin) = find_in(&dirs, "corepack") {
-            let _ = crate::updater::run_streaming(
-                &app,
-                Path::new("."),
-                &full_path_env(),
-                &corepack_bin.display().to_string(),
-                &["enable", "pnpm"],
-            )
-            .await;
-        }
+    // Either mise or brew installed node successfully (or returned an error above).
+    // Now ensure pnpm is enabled via corepack.
+    if let Some(corepack_bin) = find_in(&dirs, "corepack") {
+        let _ = crate::updater::run_streaming(
+            &app,
+            Path::new("."),
+            &full_path_env(),
+            &corepack_bin.display().to_string(),
+            &["enable", "pnpm"],
+        )
+        .await;
     }
 
     let status = check_env();

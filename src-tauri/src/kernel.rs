@@ -230,6 +230,7 @@ impl KernelManager {
     }
 
     /// Synchronous status snapshot (for tray menu updates etc.).
+    #[allow(dead_code)]
     pub fn status_blocking(&self) -> KernelInfo {
         let inner = self.inner.blocking_lock();
         let (revision, dirty) = match &inner.kernel_dir {

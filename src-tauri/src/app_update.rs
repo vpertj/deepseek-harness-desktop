@@ -163,7 +163,7 @@ async fn download_with_progress(
     let dest_for_dl = dest.clone();
     let app = app.clone();
     let version = version.to_string();
-    tokio::time::timeout(
+    let download_result = tokio::time::timeout(
         std::time::Duration::from_secs(300),
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let out = std::process::Command::new("curl")
@@ -179,9 +179,13 @@ async fn download_with_progress(
             Ok(())
         }),
     )
-    .await
-    .map_err(|_| "下载超时".to_string())?
-    .map_err(|e| e.to_string())?;
+    .await;
+    match download_result {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => return Err(e),
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => return Err("下载超时".to_string()),
+    }
     // Guard against an empty/broken download (e.g. release asset not yet
     // published): fail with a clear message instead of a confusing mount error.
     let size = std::fs::metadata(&dest)

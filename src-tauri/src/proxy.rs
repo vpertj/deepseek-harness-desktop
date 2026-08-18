@@ -7,7 +7,6 @@
 //! to the kernel EXCEPT `host.pickDirectory`, which is served by the app's
 //! native folder dialog (tauri-plugin-dialog). The kernel UI is untouched.
 
-use std::io::Read;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Once;
 use tauri::AppHandle;

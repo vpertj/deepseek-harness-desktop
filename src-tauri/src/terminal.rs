@@ -1,9 +1,9 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
-/// One live terminal session (shell spawned in a pty inside the kernel dir).
+/// One live terminal session (shell spawned in a pty).
 struct TerminalSession {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send>,
@@ -12,57 +12,88 @@ struct TerminalSession {
 
 static TERMINAL: Mutex<Option<TerminalSession>> = Mutex::new(None);
 
-/// Decode a dsh session-store directory name back into a filesystem path.
-/// dsh encodes the workspace path by replacing "/" with "-" and dropping the
-/// leading slash: "--Users-tianjun-Desktop-prog-newtonlab--" ->
-/// "/Users/tianjun/Desktop/prog/newtonlab".
-fn decode_workspace(name: &str) -> std::path::PathBuf {
-    let trimmed = name.trim_matches('-');
-    let path = trimmed.replace('-', "/");
-    std::path::PathBuf::from(format!("/{path}"))
-}
+/// Query the kernel's session.list API (via the proxy at PROXY_PORT) and return
+/// the cwd of the most recently updated session. Falls back to the kernel
+/// directory from settings.
+fn resolve_terminal_cwd() -> std::path::PathBuf {
+    let proxy_url = format!("http://127.0.0.1:{}/api/session.list", crate::proxy::PROXY_PORT);
+    let body = serde_json::to_string(&serde_json::json!({
+        "type": "client-request",
+        "rpcId": "tcwd",
+        "method": "session.list",
+        "payload": {}
+    })).unwrap_or_default();
 
-/// The shell's working directory: the dsh workspace most recently used
-/// (newest session store under ~/.dsh/sessions), falling back to the kernel
-/// directory when no workspace session exists yet.
-fn terminal_dir() -> Option<std::path::PathBuf> {
-    let sessions = dirs::home_dir()?.join(".dsh").join("sessions");
-    if let Ok(rd) = std::fs::read_dir(&sessions) {
-        let mut latest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-        for entry in rd.flatten() {
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("--") {
-                continue;
-            }
-            let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
-                continue;
-            };
-            if latest.as_ref().is_none_or(|(t, _)| mtime > *t) {
-                let dir = decode_workspace(&name);
-                if dir.is_dir() {
-                    latest = Some((mtime, dir));
+    let mut resp = match ureq::post(&proxy_url)
+        .header("Content-Type", "application/json")
+        .send(body.as_str())
+    {
+        Ok(r) => r,
+        Err(_) => {
+            return crate::config::Settings::load()
+                .effective_kernel_dir()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        }
+    };
+
+    let body_text: String = match resp.body_mut().read_to_string() {
+        Ok(s) => s,
+        Err(_) => return crate::config::Settings::load().effective_kernel_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_default()),
+    };
+
+    let Ok(data) = serde_json::from_str::<serde_json::Value>(&body_text) else {
+        return crate::config::Settings::load()
+            .effective_kernel_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+    };
+
+    if let Some(items) = data
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .and_then(|v| v.get("items"))
+        .and_then(|i| i.as_array())
+    {
+        let mut best: Option<(u64, &str)> = None;
+        for s in items {
+            if let (Some(ts), Some(cwd)) = (
+                s.get("updatedAt").and_then(|v| v.as_u64()),
+                s.get("cwd").and_then(|v| v.as_str()),
+            ) {
+                if best.as_ref().is_none_or(|(t, _)| ts > *t) {
+                    best = Some((ts, cwd));
                 }
             }
         }
-        if let Some((_, dir)) = latest {
-            return Some(dir);
+        if let Some((_ts, cwd)) = best {
+            let p = std::path::PathBuf::from(cwd);
+            if p.is_dir() {
+                return p;
+            }
         }
     }
-    crate::config::Settings::load().effective_kernel_dir()
+
+    crate::config::Settings::load()
+        .effective_kernel_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
-/// Open a shell pty rooted at the kernel directory. Only one session at a time.
+/// Open a shell pty. If cwd is provided (non-empty), use it directly; otherwise
+/// resolve the active workspace cwd from the kernel's session list.
+/// Always creates a fresh pty — kills any existing session first so the
+/// terminal follows workspace switches.
 #[tauri::command]
-pub fn terminal_open(app: AppHandle) -> Result<(), String> {
-    let mut guard = TERMINAL.lock().unwrap();
-    if guard.is_some() {
-        return Ok(()); // already open
+pub fn terminal_open(app: AppHandle, cwd: Option<String>) -> Result<(), String> {
+    // Kill any existing session so we always start fresh at the requested dir.
+    {
+        let mut guard = TERMINAL.lock().unwrap();
+        if let Some(mut s) = guard.take() {
+            let _ = s.child.kill();
+        }
     }
-    let Some(dir) = terminal_dir() else {
-        return Err("尚未设置内核目录".to_string());
+
+    let dir = match cwd {
+        Some(ref c) if !c.is_empty() => std::path::PathBuf::from(c),
+        _ => resolve_terminal_cwd(),
     };
 
     let pty_system = native_pty_system();
@@ -72,7 +103,7 @@ pub fn terminal_open(app: AppHandle) -> Result<(), String> {
 
     let mut cmd = CommandBuilder::new("/bin/zsh");
     cmd.args(["-l"]);
-    cmd.cwd(dir);
+    cmd.cwd(&dir);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
 
@@ -108,6 +139,7 @@ pub fn terminal_open(app: AppHandle) -> Result<(), String> {
         let _ = pump_app.emit("terminal-output", serde_json::json!({ "data": "\r\n[进程已结束]\r\n" }));
     });
 
+    let mut guard = TERMINAL.lock().unwrap();
     *guard = Some(TerminalSession { writer, child, master });
     Ok(())
 }
@@ -146,47 +178,5 @@ pub fn terminal_close() -> Result<(), String> {
     if let Some(mut session) = guard.take() {
         let _ = session.child.kill();
     }
-    Ok(())
-}
-
-/// Pop the terminal out into its own window. Kills any live session so the
-/// popped-out window starts a fresh shell, then opens "terminal-win" which
-/// renders the terminal standalone.
-#[tauri::command]
-pub fn terminal_popout(app: AppHandle) -> Result<(), String> {
-    if let Some(mut session) = TERMINAL.lock().unwrap().take() {
-        let _ = session.child.kill();
-    }
-    let win = tauri::WebviewWindowBuilder::new(
-        &app,
-        "terminal-win",
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title("终端")
-    .inner_size(680.0, 420.0)
-    .min_inner_size(400.0, 240.0)
-    .build()
-    .map_err(|e| format!("创建终端窗口失败: {e}"))?;
-    win.on_window_event(|event| {
-        // When the standalone terminal window is gone, kill its shell so no
-        // orphan pty stays behind (re-opening creates a fresh one).
-        if matches!(event, tauri::WindowEvent::Destroyed) {
-            if let Some(mut session) = TERMINAL.lock().unwrap().take() {
-                let _ = session.child.kill();
-            }
-        }
-    });
-    let _ = win.set_focus();
-    Ok(())
-}
-
-/// Dock the terminal back: close the popped-out window and tell the main
-/// window to re-show its bottom panel (the panel opens a fresh pty).
-#[tauri::command]
-pub fn terminal_dock_back(app: AppHandle) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("terminal-win") {
-        let _ = win.close();
-    }
-    let _ = app.emit("terminal-docked", serde_json::json!({}));
     Ok(())
 }

@@ -1,7 +1,6 @@
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::config::Settings;
 use crate::kernel::KernelManager;
 use tauri::{AppHandle, Emitter};
 
@@ -217,6 +216,7 @@ pub async fn ensure_sidecar_plugins(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn profile_dir_points_at_web_profile() {

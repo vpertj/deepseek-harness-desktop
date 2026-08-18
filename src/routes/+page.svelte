@@ -3,26 +3,11 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
   import * as s from "$lib/state.svelte";
   import * as api from "$lib/api";
-
-  // Standalone terminal window (opened via terminal_popout). The window label
-  // is the reliable discriminator — URL params/hash are eaten by tauri's
-  // asset resolution.
-  const isTerminalWindow = $state(
-    typeof window !== "undefined" &&
-      (() => {
-        try {
-          return getCurrentWindow().label === "terminal-win";
-        } catch {
-          return false;
-        }
-      })(),
-  );
 
   let settingsOpen = $state(false);
   let busy: string | null = $state(null);
@@ -48,6 +33,19 @@
   let termInstance: Terminal | null = null;
   let termFit: FitAddon | null = null;
   let termUnlisten: Promise<() => void> | null = null;
+  let termHeight = $state(260);
+  let lastKernelDir = $state<string | undefined>(s.store.kernel.kernelDir ?? undefined);
+
+  // Close terminal when kernel directory changes so the next open picks up
+  // the current project path instead of a stale one.
+  $effect(() => {
+    s.store.kernel.kernelDir;
+    const dir = s.store.kernel.kernelDir ?? undefined;
+    if (termOpen && dir !== lastKernelDir) {
+      lastKernelDir = dir;
+      void closeTerminal();
+    }
+  });
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -384,33 +382,10 @@
       await closeTerminal();
       return;
     }
-    try {
-      await api.terminalOpen();
-      termOpen = true;
-    } catch (e) {
-      toast(String(e), "err");
-    }
-  }
-
-  async function popoutTerminal() {
-    // Hide the docked panel and hand the session to a standalone window
-    // (Rust kills the pty; the new window starts a fresh shell).
-    termOpen = false;
-    if (termInstance) {
-      termInstance.dispose();
-      termInstance = null;
-      termFit = null;
-    }
-    if (termUnlisten) {
-      termUnlisten.then((fn) => fn()).catch(() => {});
-      termUnlisten = null;
-    }
-    try {
-      await api.terminalPopout();
-    } catch (e) {
-      toast(String(e), "err");
-      termOpen = true;
-    }
+    // 不要在这里调用 api.terminalOpen() —— 那会在事件监听器注册之前就启动
+    // shell 导致其初始输出丢失、终端显示为空。让 $effect 在创建 xterm 并
+    // 注册 terminal-output 监听器之后再打开 PTY，时序才正确。
+    termOpen = true;
   }
 
   async function closeTerminal() {
@@ -427,8 +402,37 @@
     await api.terminalClose().catch(() => {});
   }
 
+  // Terminal panel height resize
+  let resizing = $state(false);
+  let resizeStartY = $state(0);
+  let resizeStartHeight = $state(260);
+
+  function startResize(e: MouseEvent) {
+    e.preventDefault();
+    resizing = true;
+    resizeStartY = e.clientY;
+    resizeStartHeight = termHeight;
+    document.body.style.cursor = "ns-resize";
+    window.addEventListener("mousemove", onResizeMove);
+    window.addEventListener("mouseup", stopResize);
+  }
+
+  function onResizeMove(e: MouseEvent) {
+    if (!resizing) return;
+    const delta = resizeStartY - e.clientY;
+    termHeight = Math.max(160, Math.min(600, resizeStartHeight + delta));
+  }
+
+  function stopResize() {
+    resizing = false;
+    document.body.style.cursor = "";
+    window.removeEventListener("mousemove", onResizeMove);
+    window.removeEventListener("mouseup", stopResize);
+  }
+
   $effect(() => {
-    if ((!termOpen && !isTerminalWindow) || !termEl) return;
+    const canInit = termOpen && !!termEl;
+    if (!canInit) return;
     // Lazily create the xterm instance once the panel is mounted.
     if (!termInstance) {
       const isLight = document.documentElement.classList.contains("theme-light");
@@ -459,7 +463,15 @@
       });
       termUnlisten
         .then(() => api.terminalOpen())
-        .catch((e) => toast(String(e), "err"));
+        .catch((e) => {
+          toast(String(e), "err");
+          // Open failed: roll back the term state so the panel doesn't stay
+          // mounted with a dead xterm (e.g. "尚未设置内核目录").
+          termInstance?.dispose();
+          termInstance = null;
+          termFit = null;
+          termOpen = false;
+        });
     }
     // Keep the pty size in sync with the panel.
     const resize = () => {
@@ -470,7 +482,9 @@
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(termEl);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+    };
   });
 
   async function installPlugin() {
@@ -505,11 +519,6 @@
   }
 
   onMount(() => {
-    if (isTerminalWindow) {
-      // Standalone terminal window: only wire the terminal, nothing else.
-      termOpen = true;
-      return;
-    }
     try {
       s.wireEvents();
     } catch (e) {
@@ -550,17 +559,12 @@
       envSetupPhase = p.step;
       if (p.step === "error") envSetupError = p.message ?? String(e.payload);
     });
-    // The popped-out terminal window asked to dock back: re-show the panel.
-    const unDock = listen("terminal-docked", () => {
-      termOpen = true;
-    });
     return () => {
       clearInterval(themeTimer);
       clearInterval(updateTimer);
       un.then((fn) => fn()).catch(() => {});
       unProg.then((fn) => fn()).catch(() => {});
       unEnv.then((fn) => fn()).catch(() => {});
-      unDock.then((fn) => fn()).catch(() => {});
     };
   });
 
@@ -641,17 +645,6 @@
 </svelte:head>
 
 <main class="app">
-  {#if isTerminalWindow}
-    <!-- ============ 独立终端窗口 ============ -->
-    <div class="term-window">
-      <div class="term-head">
-        <span class="term-title">终端</span>
-        <span class="term-hint">工作目录：当前项目（dsh 最近使用的工作区）</span>
-        <button class="btn btn-sm" onclick={() => void api.terminalDockBack()}>放回</button>
-      </div>
-      <div class="term-window-body" bind:this={termEl}></div>
-    </div>
-  {:else}
   {#if kernelErrorHint}
     <div class="error-banner">{kernelErrorHint}</div>
   {/if}
@@ -730,9 +723,12 @@
   <!-- ============ 底部栏 ============ -->
   <footer class="bottombar">
     <div class="bar-left">
-      <div class={`status-pill pill-${s.store.kernel.status.state}`} title={kernelErrorHint ?? ""}>
+      <div class={`status-pill pill-${s.store.kernel.status.state}`} title={kernelErrorHint ?? ""} onclick={() => { settingsOpen = true; modalTab = "kernel"; }}>
         <span class={`dot dot-${s.store.kernel.status.state}`}></span>
         <span class="status-text">{stateLabel}</span>
+        {#if s.store.kernel.status.state === "running"}
+          <svg class="pill-arrow" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        {/if}
       </div>
     </div>
 
@@ -744,24 +740,16 @@
         </svg>
         <span>终端</span>
       </button>
-      <button class="btn btn-gear" onclick={openSettings} title="内核管理">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        <span>内核</span>
-      </button>
     </div>
   </footer>
 
   <!-- ============ 终端面板 ============ -->
   {#if termOpen}
-    <div class="term-panel">
+    <div class="term-panel" style="height: {termHeight}px">
+      <div class="term-resize-handle" onmousedown={startResize}></div>
       <div class="term-head">
         <span class="term-title">终端</span>
-        <span class="term-hint">工作目录：当前项目（dsh 最近使用的工作区）</span>
-        <button class="btn btn-sm" onclick={popoutTerminal} title="弹出为独立窗口">弹出</button>
-        <button class="btn btn-sm" onclick={closeTerminal}>关闭</button>
+        <button class="term-close" onclick={closeTerminal}>×</button>
       </div>
       <div class="term-body" bind:this={termEl}></div>
     </div>
@@ -1013,7 +1001,6 @@
   {#if toastMsg}
     <div class={`toast toast-${toastKind}`}>{toastMsg}</div>
   {/if}
-  {/if}
 </main>
 
 <style>
@@ -1051,7 +1038,11 @@
     --accent-hover: #4680ff;
     --accent-text: #ffffff;
   }
+  :global(html) {
+    height: 100%;
+  }
   :global(body) {
+    height: 100%;
     margin: 0;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     background: var(--bg);
@@ -1092,9 +1083,11 @@
     padding: 3px 10px;
     border-radius: 999px;
     background: var(--btn-bg);
-    border: 1px solid var(--border);
-    cursor: default;
+    cursor: pointer;
     transition: background 0.2s;
+  }
+  .status-pill:hover {
+    background: var(--surface-2);
   }
   .pill-running {
     background: rgba(52, 211, 153, 0.1);
@@ -1139,6 +1132,16 @@
     color: var(--text);
     white-space: nowrap;
   }
+  .pill-arrow {
+    opacity: 0;
+    color: rgba(52, 211, 153, 0.7);
+    transform: translateX(-2px);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .pill-running:hover .pill-arrow {
+    opacity: 1;
+    transform: translateX(0);
+  }
   /* 齿轮按钮 */
   .btn-gear {
     display: inline-flex;
@@ -1163,15 +1166,25 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    height: 260px;
     border-top: 1px solid var(--border-strong);
     background: var(--surface);
+    overflow: hidden;
+  }
+  .term-resize-handle {
+    height: 4px;
+    cursor: ns-resize;
+    background: transparent;
+    flex-shrink: 0;
+  }
+  .term-resize-handle:hover,
+  .term-resize-handle:active {
+    background: var(--border);
   }
   .term-head {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 12px;
+    justify-content: space-between;
+    padding: 5px 12px;
     background: var(--surface-2);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -1179,12 +1192,23 @@
   .term-title {
     font-size: 12px;
     font-weight: 600;
-    color: var(--text);
-  }
-  .term-hint {
-    flex: 1;
-    font-size: 11px;
     color: var(--text-faint);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+  .term-close {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--text-faint);
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .term-close:hover {
+    color: var(--text);
+    background: var(--surface-3);
   }
   .term-body {
     flex: 1;
@@ -1192,24 +1216,6 @@
     overflow: hidden;
   }
   .term-body .xterm {
-    height: 100%;
-  }
-  /* ---- 独立终端窗口 ---- */
-  .term-window {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--surface);
-  }
-  .term-window .term-head {
-    padding: 8px 14px;
-  }
-  .term-window-body {
-    flex: 1;
-    padding: 8px 10px;
-    overflow: hidden;
-  }
-  .term-window-body .xterm {
     height: 100%;
   }
 
