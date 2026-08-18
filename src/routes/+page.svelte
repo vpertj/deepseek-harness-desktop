@@ -348,8 +348,11 @@
     if (err) {
       toast(err, "err");
     } else {
+      // Refresh status AND re-run the update check so the panel shows the
+      // new revision / "already up to date" instead of stale info.
       await s.refreshStatus();
-      toast("内核更新完成", "ok");
+      await s.checkUpdate();
+      toast("内核更新完成，已是最新版本", "ok");
     }
   }
 
