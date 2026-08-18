@@ -395,34 +395,14 @@
     if (!termOpen || !termEl) return;
     // Lazily create the xterm instance once the panel is mounted.
     if (!termInstance) {
+      const isLight = document.documentElement.classList.contains("theme-light");
       termInstance = new Terminal({
         fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
         fontSize: 12.5,
         lineHeight: 1.35,
         cursorBlink: true,
         scrollback: 4000,
-        theme: {
-          background: "#151517",
-          foreground: "#F9FAFB",
-          cursor: "#679EFE",
-          selectionBackground: "rgba(103, 158, 254, 0.35)",
-          black: "#151517",
-          red: "#f87171",
-          green: "#4ade80",
-          yellow: "#facc15",
-          blue: "#679EFE",
-          magenta: "#c084fc",
-          cyan: "#22d3ee",
-          white: "#F9FAFB",
-          brightBlack: "#6b7280",
-          brightRed: "#fca5a5",
-          brightGreen: "#86efac",
-          brightYellow: "#fde047",
-          brightBlue: "#93b4fd",
-          brightMagenta: "#d8b4fe",
-          brightCyan: "#67e8f9",
-          brightWhite: "#ffffff",
-        },
+        theme: isLight ? TERM_THEME_LIGHT : TERM_THEME_DARK,
       });
       termFit = new FitAddon();
       termInstance.loadAddon(termFit);
@@ -536,6 +516,51 @@
   let themeTimer: ReturnType<typeof setInterval> | undefined;
   let updateTimer: ReturnType<typeof setInterval> | undefined;
 
+  const TERM_THEME_DARK = {
+    background: "#151517",
+    foreground: "#F9FAFB",
+    cursor: "#679EFE",
+    selectionBackground: "rgba(103, 158, 254, 0.35)",
+    black: "#151517",
+    red: "#f87171",
+    green: "#4ade80",
+    yellow: "#facc15",
+    blue: "#679EFE",
+    magenta: "#c084fc",
+    cyan: "#22d3ee",
+    white: "#F9FAFB",
+    brightBlack: "#6b7280",
+    brightRed: "#fca5a5",
+    brightGreen: "#86efac",
+    brightYellow: "#fde047",
+    brightBlue: "#93b4fd",
+    brightMagenta: "#d8b4fe",
+    brightCyan: "#67e8f9",
+    brightWhite: "#ffffff",
+  };
+  const TERM_THEME_LIGHT = {
+    background: "#ffffff",
+    foreground: "#1f2937",
+    cursor: "#2563eb",
+    selectionBackground: "rgba(37, 99, 235, 0.25)",
+    black: "#1f2937",
+    red: "#dc2626",
+    green: "#16a34a",
+    yellow: "#ca8a04",
+    blue: "#2563eb",
+    magenta: "#9333ea",
+    cyan: "#0891b2",
+    white: "#1f2937",
+    brightBlack: "#6b7280",
+    brightRed: "#ef4444",
+    brightGreen: "#22c55e",
+    brightYellow: "#eab308",
+    brightBlue: "#3b82f6",
+    brightMagenta: "#a855f7",
+    brightCyan: "#06b6d4",
+    brightWhite: "#111827",
+  };
+
   function applyTheme(pref: string) {
     const dark =
       pref === "dark" ||
@@ -543,6 +568,10 @@
     const root = document.documentElement;
     root.classList.toggle("theme-light", !dark);
     root.classList.toggle("theme-dark", dark);
+    // Terminal colors follow the same theme.
+    if (termInstance) {
+      termInstance.options.theme = dark ? TERM_THEME_DARK : TERM_THEME_LIGHT;
+    }
   }
 
   async function syncTheme() {
@@ -1071,7 +1100,7 @@
     flex-direction: column;
     height: 260px;
     border-top: 1px solid var(--border-strong);
-    background: #151517;
+    background: var(--surface);
   }
   .term-head {
     display: flex;
