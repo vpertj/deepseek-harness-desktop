@@ -667,7 +667,7 @@
     <div class="term-panel">
       <div class="term-head">
         <span class="term-title">终端</span>
-        <span class="term-hint">工作目录：内核目录</span>
+        <span class="term-hint">工作目录：当前项目（dsh 最近使用的工作区）</span>
         <button class="btn btn-sm" onclick={closeTerminal}>关闭</button>
       </div>
       <div class="term-body" bind:this={termEl}></div>

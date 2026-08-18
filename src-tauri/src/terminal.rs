@@ -12,7 +12,45 @@ struct TerminalSession {
 
 static TERMINAL: Mutex<Option<TerminalSession>> = Mutex::new(None);
 
+/// Decode a dsh session-store directory name back into a filesystem path.
+/// dsh encodes the workspace path by replacing "/" with "-" and dropping the
+/// leading slash: "--Users-tianjun-Desktop-prog-newtonlab--" ->
+/// "/Users/tianjun/Desktop/prog/newtonlab".
+fn decode_workspace(name: &str) -> std::path::PathBuf {
+    let trimmed = name.trim_matches('-');
+    let path = trimmed.replace('-', "/");
+    std::path::PathBuf::from(format!("/{path}"))
+}
+
+/// The shell's working directory: the dsh workspace most recently used
+/// (newest session store under ~/.dsh/sessions), falling back to the kernel
+/// directory when no workspace session exists yet.
 fn terminal_dir() -> Option<std::path::PathBuf> {
+    let sessions = dirs::home_dir()?.join(".dsh").join("sessions");
+    if let Ok(rd) = std::fs::read_dir(&sessions) {
+        let mut latest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+        for entry in rd.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("--") {
+                continue;
+            }
+            let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if latest.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                let dir = decode_workspace(&name);
+                if dir.is_dir() {
+                    latest = Some((mtime, dir));
+                }
+            }
+        }
+        if let Some((_, dir)) = latest {
+            return Some(dir);
+        }
+    }
     crate::config::Settings::load().effective_kernel_dir()
 }
 
