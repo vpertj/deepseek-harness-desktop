@@ -429,8 +429,6 @@
 
   $effect(() => {
     if ((!termOpen && !isTerminalWindow) || !termEl) return;
-    // Ensure a pty exists (idempotent — Rust returns Ok when already open).
-    void api.terminalOpen().catch((e) => toast(String(e), "err"));
     // Lazily create the xterm instance once the panel is mounted.
     if (!termInstance) {
       const isLight = document.documentElement.classList.contains("theme-light");
@@ -452,10 +450,16 @@
         void api.terminalWrite(data).catch(() => {});
       });
 
+      // Register the output listener FIRST, then open the pty — otherwise the
+      // shell's early output (prompt etc.) is emitted before the listener
+      // exists and the terminal renders blank.
       termUnlisten = listen("terminal-output", (e) => {
         const d = (e.payload as { data?: string }).data ?? "";
         termInstance?.write(d);
       });
+      termUnlisten
+        .then(() => api.terminalOpen())
+        .catch((e) => toast(String(e), "err"));
     }
     // Keep the pty size in sync with the panel.
     const resize = () => {
