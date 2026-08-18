@@ -3,6 +3,9 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { Terminal } from "@xterm/xterm";
+  import { FitAddon } from "@xterm/addon-fit";
+  import "@xterm/xterm/css/xterm.css";
   import * as s from "$lib/state.svelte";
   import * as api from "$lib/api";
 
@@ -25,6 +28,11 @@
   let appUpdating = $state(false);
   let appUpdatePhase = $state<string | null>(null);
   let modalTab = $state<"status" | "kernel" | "plugins" | "prefs" | "about">("status");
+  let termOpen = $state(false);
+  let termEl: HTMLDivElement | undefined = $state();
+  let termInstance: Terminal | null = null;
+  let termFit: FitAddon | null = null;
+  let termUnlisten: Promise<() => void> | null = null;
 
   // Auto-scroll the log panel to the newest line.
   $effect(() => {
@@ -356,6 +364,93 @@
     }
   }
 
+  async function toggleTerminal() {
+    if (termOpen) {
+      await closeTerminal();
+      return;
+    }
+    try {
+      await api.terminalOpen();
+      termOpen = true;
+    } catch (e) {
+      toast(String(e), "err");
+    }
+  }
+
+  async function closeTerminal() {
+    termOpen = false;
+    if (termInstance) {
+      termInstance.dispose();
+      termInstance = null;
+      termFit = null;
+    }
+    if (termUnlisten) {
+      termUnlisten.then((fn) => fn()).catch(() => {});
+      termUnlisten = null;
+    }
+    await api.terminalClose().catch(() => {});
+  }
+
+  $effect(() => {
+    if (!termOpen || !termEl) return;
+    // Lazily create the xterm instance once the panel is mounted.
+    if (!termInstance) {
+      termInstance = new Terminal({
+        fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+        fontSize: 12.5,
+        lineHeight: 1.35,
+        cursorBlink: true,
+        scrollback: 4000,
+        theme: {
+          background: "#151517",
+          foreground: "#F9FAFB",
+          cursor: "#679EFE",
+          selectionBackground: "rgba(103, 158, 254, 0.35)",
+          black: "#151517",
+          red: "#f87171",
+          green: "#4ade80",
+          yellow: "#facc15",
+          blue: "#679EFE",
+          magenta: "#c084fc",
+          cyan: "#22d3ee",
+          white: "#F9FAFB",
+          brightBlack: "#6b7280",
+          brightRed: "#fca5a5",
+          brightGreen: "#86efac",
+          brightYellow: "#fde047",
+          brightBlue: "#93b4fd",
+          brightMagenta: "#d8b4fe",
+          brightCyan: "#67e8f9",
+          brightWhite: "#ffffff",
+        },
+      });
+      termFit = new FitAddon();
+      termInstance.loadAddon(termFit);
+      termInstance.open(termEl);
+      termFit.fit();
+      termInstance.focus();
+
+      termInstance.onData((data) => {
+        void api.terminalWrite(data).catch(() => {});
+      });
+
+      termUnlisten = listen("terminal-output", (e) => {
+        const d = (e.payload as { data?: string }).data ?? "";
+        termInstance?.write(d);
+      });
+    }
+    // Keep the pty size in sync with the panel.
+    const resize = () => {
+      termFit?.fit();
+      const dims = termFit?.proposeDimensions();
+      if (dims) void api.terminalResize(dims.rows, dims.cols).catch(() => {});
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(termEl);
+    return () => ro.disconnect();
+  });
+
   async function installPlugin() {
     if (pluginName.trim() === "") return;
     await run("plugin", async () => {
@@ -550,6 +645,13 @@
     </div>
 
     <div class="bar-right">
+      <button class="btn btn-gear" class:btn-active={termOpen} onclick={toggleTerminal} title={termOpen ? "关闭终端" : "打开终端"}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="4 17 10 11 4 5"></polyline>
+          <line x1="12" y1="19" x2="20" y2="19"></line>
+        </svg>
+        <span>终端</span>
+      </button>
       <button class="btn btn-gear" onclick={openSettings} title="内核管理">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3"></circle>
@@ -559,6 +661,18 @@
       </button>
     </div>
   </footer>
+
+  <!-- ============ 终端面板 ============ -->
+  {#if termOpen}
+    <div class="term-panel">
+      <div class="term-head">
+        <span class="term-title">终端</span>
+        <span class="term-hint">工作目录：内核目录</span>
+        <button class="btn btn-sm" onclick={closeTerminal}>关闭</button>
+      </div>
+      <div class="term-body" bind:this={termEl}></div>
+    </div>
+  {/if}
 
   <!-- ============ 日志面板 ============ -->
   {#if s.store.logPanelOpen}
@@ -944,6 +1058,47 @@
   }
   .btn-gear:hover svg {
     opacity: 1;
+  }
+  .btn-gear.btn-active {
+    background: rgba(103, 158, 254, 0.14);
+    color: var(--accent);
+  }
+
+  /* ---- 终端面板 ---- */
+  .term-panel {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    height: 260px;
+    border-top: 1px solid var(--border-strong);
+    background: #151517;
+  }
+  .term-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .term-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .term-hint {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+  .term-body {
+    flex: 1;
+    padding: 6px 8px;
+    overflow: hidden;
+  }
+  .term-body .xterm {
+    height: 100%;
   }
 
   /* ---- 按钮（幽灵风，对齐内核 UI） ---- */

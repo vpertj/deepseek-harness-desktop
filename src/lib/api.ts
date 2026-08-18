@@ -100,6 +100,24 @@ export function kernelInstall(): Promise<void> {
   return invoke("kernel_install");
 }
 
+// ---- Terminal (pty shell in the kernel dir) --------------------------------
+
+export function terminalOpen(): Promise<void> {
+  return invoke("terminal_open");
+}
+
+export function terminalWrite(data: string): Promise<void> {
+  return invoke("terminal_write", { data });
+}
+
+export function terminalResize(rows: number, cols: number): Promise<void> {
+  return invoke("terminal_resize", { rows, cols });
+}
+
+export function terminalClose(): Promise<void> {
+  return invoke("terminal_close");
+}
+
 // ---- Theme (follows the kernel UI's appearance setting) -------------------
 
 export interface ThemeDto {

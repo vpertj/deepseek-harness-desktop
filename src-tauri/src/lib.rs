@@ -6,6 +6,7 @@ mod logfile;
 mod plugin;
 mod proxy;
 mod settings;
+mod terminal;
 mod theme;
 mod tray;
 mod updater;
@@ -89,6 +90,10 @@ pub fn run() {
             plugin::plugin_remove,
             app_update::app_update_check,
             app_update::app_download_update,
+            terminal::terminal_open,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
