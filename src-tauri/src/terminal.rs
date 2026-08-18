@@ -1,7 +1,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// One live terminal session (shell spawned in a pty inside the kernel dir).
 struct TerminalSession {
@@ -146,5 +146,47 @@ pub fn terminal_close() -> Result<(), String> {
     if let Some(mut session) = guard.take() {
         let _ = session.child.kill();
     }
+    Ok(())
+}
+
+/// Pop the terminal out into its own window. Kills any live session so the
+/// popped-out window starts a fresh shell, then opens "terminal-win" which
+/// renders the terminal standalone.
+#[tauri::command]
+pub fn terminal_popout(app: AppHandle) -> Result<(), String> {
+    if let Some(mut session) = TERMINAL.lock().unwrap().take() {
+        let _ = session.child.kill();
+    }
+    let win = tauri::WebviewWindowBuilder::new(
+        &app,
+        "terminal-win",
+        tauri::WebviewUrl::App("index.html?view=terminal".into()),
+    )
+    .title("终端")
+    .inner_size(680.0, 420.0)
+    .min_inner_size(400.0, 240.0)
+    .build()
+    .map_err(|e| format!("创建终端窗口失败: {e}"))?;
+    win.on_window_event(|event| {
+        // When the standalone terminal window is gone, kill its shell so no
+        // orphan pty stays behind (re-opening creates a fresh one).
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Some(mut session) = TERMINAL.lock().unwrap().take() {
+                let _ = session.child.kill();
+            }
+        }
+    });
+    let _ = win.set_focus();
+    Ok(())
+}
+
+/// Dock the terminal back: close the popped-out window and tell the main
+/// window to re-show its bottom panel (the panel opens a fresh pty).
+#[tauri::command]
+pub fn terminal_dock_back(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("terminal-win") {
+        let _ = win.close();
+    }
+    let _ = app.emit("terminal-docked", serde_json::json!({}));
     Ok(())
 }

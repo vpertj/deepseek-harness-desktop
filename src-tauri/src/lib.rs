@@ -94,6 +94,8 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_close,
+            terminal::terminal_popout,
+            terminal::terminal_dock_back,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

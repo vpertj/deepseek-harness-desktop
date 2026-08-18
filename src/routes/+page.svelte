@@ -9,6 +9,9 @@
   import * as s from "$lib/state.svelte";
   import * as api from "$lib/api";
 
+  // Standalone terminal window (opened via terminal_popout).
+  const isTerminalWindow = $state(typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "terminal");
+
   let settingsOpen = $state(false);
   let busy: string | null = $state(null);
   let toastMsg = $state<string | null>(null);
@@ -377,6 +380,27 @@
     }
   }
 
+  async function popoutTerminal() {
+    // Hide the docked panel and hand the session to a standalone window
+    // (Rust kills the pty; the new window starts a fresh shell).
+    termOpen = false;
+    if (termInstance) {
+      termInstance.dispose();
+      termInstance = null;
+      termFit = null;
+    }
+    if (termUnlisten) {
+      termUnlisten.then((fn) => fn()).catch(() => {});
+      termUnlisten = null;
+    }
+    try {
+      await api.terminalPopout();
+    } catch (e) {
+      toast(String(e), "err");
+      termOpen = true;
+    }
+  }
+
   async function closeTerminal() {
     termOpen = false;
     if (termInstance) {
@@ -392,7 +416,9 @@
   }
 
   $effect(() => {
-    if (!termOpen || !termEl) return;
+    if ((!termOpen && !isTerminalWindow) || !termEl) return;
+    // Ensure a pty exists (idempotent — Rust returns Ok when already open).
+    void api.terminalOpen().catch((e) => toast(String(e), "err"));
     // Lazily create the xterm instance once the panel is mounted.
     if (!termInstance) {
       const isLight = document.documentElement.classList.contains("theme-light");
@@ -463,6 +489,11 @@
   }
 
   onMount(() => {
+    if (isTerminalWindow) {
+      // Standalone terminal window: only wire the terminal, nothing else.
+      termOpen = true;
+      return;
+    }
     try {
       s.wireEvents();
     } catch (e) {
@@ -503,12 +534,17 @@
       envSetupPhase = p.step;
       if (p.step === "error") envSetupError = p.message ?? String(e.payload);
     });
+    // The popped-out terminal window asked to dock back: re-show the panel.
+    const unDock = listen("terminal-docked", () => {
+      termOpen = true;
+    });
     return () => {
       clearInterval(themeTimer);
       clearInterval(updateTimer);
       un.then((fn) => fn()).catch(() => {});
       unProg.then((fn) => fn()).catch(() => {});
       unEnv.then((fn) => fn()).catch(() => {});
+      unDock.then((fn) => fn()).catch(() => {});
     };
   });
 
@@ -589,6 +625,17 @@
 </svelte:head>
 
 <main class="app">
+  {#if isTerminalWindow}
+    <!-- ============ 独立终端窗口 ============ -->
+    <div class="term-window">
+      <div class="term-head">
+        <span class="term-title">终端</span>
+        <span class="term-hint">工作目录：当前项目（dsh 最近使用的工作区）</span>
+        <button class="btn btn-sm" onclick={() => void api.terminalDockBack()}>放回</button>
+      </div>
+      <div class="term-window-body" bind:this={termEl}></div>
+    </div>
+  {:else}
   {#if kernelErrorHint}
     <div class="error-banner">{kernelErrorHint}</div>
   {/if}
@@ -697,6 +744,7 @@
       <div class="term-head">
         <span class="term-title">终端</span>
         <span class="term-hint">工作目录：当前项目（dsh 最近使用的工作区）</span>
+        <button class="btn btn-sm" onclick={popoutTerminal} title="弹出为独立窗口">弹出</button>
         <button class="btn btn-sm" onclick={closeTerminal}>关闭</button>
       </div>
       <div class="term-body" bind:this={termEl}></div>
@@ -949,6 +997,7 @@
   {#if toastMsg}
     <div class={`toast toast-${toastKind}`}>{toastMsg}</div>
   {/if}
+  {/if}
 </main>
 
 <style>
@@ -1127,6 +1176,24 @@
     overflow: hidden;
   }
   .term-body .xterm {
+    height: 100%;
+  }
+  /* ---- 独立终端窗口 ---- */
+  .term-window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--surface);
+  }
+  .term-window .term-head {
+    padding: 8px 14px;
+  }
+  .term-window-body {
+    flex: 1;
+    padding: 8px 10px;
+    overflow: hidden;
+  }
+  .term-window-body .xterm {
     height: 100%;
   }
 

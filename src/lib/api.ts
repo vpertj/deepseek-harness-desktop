@@ -118,6 +118,14 @@ export function terminalClose(): Promise<void> {
   return invoke("terminal_close");
 }
 
+export function terminalPopout(): Promise<void> {
+  return invoke("terminal_popout");
+}
+
+export function terminalDockBack(): Promise<void> {
+  return invoke("terminal_dock_back");
+}
+
 // ---- Theme (follows the kernel UI's appearance setting) -------------------
 
 export interface ThemeDto {
