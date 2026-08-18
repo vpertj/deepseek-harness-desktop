@@ -3,16 +3,25 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
   import * as s from "$lib/state.svelte";
   import * as api from "$lib/api";
 
-  // Standalone terminal window (opened via terminal_popout).
+  // Standalone terminal window (opened via terminal_popout). The window label
+  // is the reliable discriminator — URL params/hash are eaten by tauri's
+  // asset resolution.
   const isTerminalWindow = $state(
     typeof window !== "undefined" &&
-      (window.location.hash === "#terminal" || new URLSearchParams(window.location.search).get("view") === "terminal"),
+      (() => {
+        try {
+          return getCurrentWindow().label === "terminal-win";
+        } catch {
+          return false;
+        }
+      })(),
   );
 
   let settingsOpen = $state(false);

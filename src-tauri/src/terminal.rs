@@ -160,7 +160,7 @@ pub fn terminal_popout(app: AppHandle) -> Result<(), String> {
     let win = tauri::WebviewWindowBuilder::new(
         &app,
         "terminal-win",
-        tauri::WebviewUrl::App("index.html#terminal".into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title("终端")
     .inner_size(680.0, 420.0)
