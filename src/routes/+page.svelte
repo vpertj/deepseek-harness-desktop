@@ -10,7 +10,10 @@
   import * as api from "$lib/api";
 
   // Standalone terminal window (opened via terminal_popout).
-  const isTerminalWindow = $state(typeof window !== "undefined" && new URLSearchParams(window.location.search).get("view") === "terminal");
+  const isTerminalWindow = $state(
+    typeof window !== "undefined" &&
+      (window.location.hash === "#terminal" || new URLSearchParams(window.location.search).get("view") === "terminal"),
+  );
 
   let settingsOpen = $state(false);
   let busy: string | null = $state(null);
