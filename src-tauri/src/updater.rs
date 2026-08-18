@@ -189,8 +189,13 @@ pub async fn apply_update(
     if info.dirty {
         return Err("内核目录有本地改动（dirty），请先在终端处理（git stash 或 commit）后再更新".to_string());
     }
+
+    // Remember whether the kernel was running; stop it automatically for the
+    // update, then restart it afterwards (independent of the shell window).
+    let was_running = matches!(info.status, crate::kernel::KernelStatus::Running { .. });
     if !matches!(info.status, crate::kernel::KernelStatus::Stopped) {
-        return Err("更新前请先停止内核（点顶栏「停止」按钮）".to_string());
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 停止内核 ==" }));
+        manager.stop().await?;
     }
     if find_git().is_none() {
         return Err("更新内核需要 git（Xcode 命令行工具），请先安装后重试".into());
@@ -218,6 +223,23 @@ pub async fn apply_update(
         "kernel-log",
         serde_json::json!({ "stream": "out", "line": format!("== 更新完成，当前版本 {rev} ==") }),
     );
+
+    // Restart the kernel if it was running before the update.
+    if was_running {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 重启内核 ==" }));
+        match manager.start(app).await {
+            Ok(port) => {
+                let _ = app.emit(
+                    "kernel-log",
+                    serde_json::json!({ "stream": "out", "line": format!("== 内核已重启，端口 {port} ==") }),
+                );
+            }
+            Err(e) => {
+                return Err(format!("内核更新完成，但重启内核失败: {e}"));
+            }
+        }
+    }
+
     let _ = app.emit(
         "update-status",
         serde_json::json!({ "phase": "done", "revision": rev }),

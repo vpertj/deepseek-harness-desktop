@@ -331,6 +331,28 @@
     }
   }
 
+  async function restartKernel() {
+    if (busy !== null) return;
+    try {
+      await api.kernelStop();
+      await api.kernelStart();
+      toast("内核已重启", "ok");
+    } catch (e) {
+      toast(String(e), "err");
+    }
+  }
+
+  async function applyKernelUpdate() {
+    if (busy !== null) return;
+    const err = await s.applyUpdate();
+    if (err) {
+      toast(err, "err");
+    } else {
+      await s.refreshStatus();
+      toast("内核更新完成", "ok");
+    }
+  }
+
   async function installPlugin() {
     if (pluginName.trim() === "") return;
     await run("plugin", async () => {
@@ -626,9 +648,14 @@
               <div class="field">
                 <label for="check-btn">内核更新</label>
                 <div class="row-inline">
-                  <button id="check-btn" class="btn" onclick={check} disabled={busy !== null || !s.store.kernel.kernelDir || s.store.kernel.status.state !== "stopped"}>
+                  <button id="check-btn" class="btn" onclick={check} disabled={busy !== null || !s.store.kernel.kernelDir}>
                     {s.store.checkingUpdate ? "检查中…" : "检查更新"}
                   </button>
+                  {#if s.store.updateInfo?.update_available}
+                    <button class="btn btn-primary" onclick={applyKernelUpdate} disabled={busy !== null || s.store.updating}>
+                      {s.store.updating ? "更新中…" : "立即更新"}
+                    </button>
+                  {/if}
                   {#if s.store.updateInfo}
                     <span class="hint">
                       {#if s.store.updateInfo.update_available}
@@ -733,18 +760,41 @@
         </div>
 
         <div class="modal-foot">
-          <button class="btn" onclick={() => (settingsOpen = false)}>关闭</button>
-          <button
-            class="btn btn-primary"
-            onclick={async () => {
-              await start();
-              if (s.store.kernel.status.state !== "starting" && s.store.kernel.status.state !== "running") return;
-              settingsOpen = false;
-            }}
-            disabled={busy !== null || !s.store.kernel.kernelDir}
-          >
-            {s.store.kernel.status.state === "running" ? "内核运行中" : "启动内核"}
-          </button>
+          <div class="modal-foot-status">
+            {#if s.store.kernel.status.state === "running" && port}
+              <p class="kernel-running-text">
+                <span class="foot-dot"></span>内核运行中 · http://127.0.0.1:{port}
+              </p>
+            {:else if s.store.kernel.status.state === "starting"}
+              <p class="kernel-starting-text">内核启动中…</p>
+            {:else}
+              <p class="kernel-stopped-text">内核未运行</p>
+            {/if}
+          </div>
+          <div class="modal-foot-actions">
+            <button class="btn" onclick={() => (settingsOpen = false)}>关闭</button>
+            {#if s.store.kernel.status.state === "running"}
+              <button
+                class="btn btn-primary"
+                onclick={restartKernel}
+                disabled={busy !== null || s.store.kernel.status.state !== "running"}
+              >
+                重启内核
+              </button>
+            {:else}
+              <button
+                class="btn btn-primary"
+                onclick={async () => {
+                  await start();
+                  if (s.store.kernel.status.state !== "starting" && s.store.kernel.status.state !== "running") return;
+                  settingsOpen = false;
+                }}
+                disabled={busy !== null || !s.store.kernel.kernelDir}
+              >
+                启动内核
+              </button>
+            {/if}
+          </div>
         </div>
       </div>
     </div>
@@ -1469,8 +1519,45 @@
   }
   .modal-foot {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
     margin-top: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+  .modal-foot-status {
+    min-width: 0;
+  }
+  .modal-foot-status p {
+    margin: 0;
+    font-size: 12.5px;
+  }
+  .kernel-running-text {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #34d399;
+    font-weight: 500;
+  }
+  .kernel-starting-text {
+    color: var(--text-dim);
+  }
+  .kernel-stopped-text {
+    color: var(--text-faint);
+  }
+  .foot-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #34d399;
+    box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+    flex-shrink: 0;
+  }
+  .modal-foot-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
   /* ---- toast ---- */
