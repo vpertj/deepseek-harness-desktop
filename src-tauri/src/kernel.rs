@@ -335,6 +335,10 @@ impl KernelManager {
         if let Err(e) = crate::plugin::ensure_sidecar_plugins(self, app).await {
             eprintln!("[kernel] sidecar plugin setup warning: {e}");
         }
+        // Auto-install bundled dsh-memory-evolve on first kernel start.
+        if let Err(e) = crate::memory_evolve_plugin::ensure_installed().await {
+            eprintln!("[memory-evolve] auto-install warning: {e}");
+        }
         // Take over any dsh web instance the user started outside this app
         // (own terminal, scripts, other tools) before spawning ours.
         let taken = kill_external_dsh_web();

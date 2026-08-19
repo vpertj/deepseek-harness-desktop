@@ -3,6 +3,7 @@ mod config;
 mod envcheck;
 mod kernel;
 mod logfile;
+mod memory_evolve_plugin;
 mod plugin;
 mod proxy;
 mod settings;
