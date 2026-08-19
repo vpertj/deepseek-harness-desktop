@@ -823,6 +823,9 @@
                   {#if s.store.kernel.revision}
                     <span class="mono"> · {s.store.kernel.revision.slice(0, 7)}</span>
                   {/if}
+                  {#if s.store.kernel.version}
+                    <span class="mono"> ({s.store.kernel.version})</span>
+                  {/if}
                 </p>
               </div>
             {:else if modalTab === "kernel"}

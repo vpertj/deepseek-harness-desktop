@@ -25,6 +25,8 @@ pub struct KernelInfo {
     pub kernel_dir: Option<PathBuf>,
     /// Current git HEAD short sha of the kernel checkout, if any.
     pub revision: Option<String>,
+    /// Closest git tag of the kernel checkout (e.g. `dsh-v0.1.0-rc.7`), if any.
+    pub version: Option<String>,
     /// True when the working tree is dirty (local modifications).
     pub dirty: bool,
     /// True when the configured dir looks like a kernel checkout. Works even
@@ -180,6 +182,24 @@ pub fn git_revision(dir: &Path) -> (Option<String>, bool) {
     (short, dirty)
 }
 
+/// Read the kernel checkout's closest annotated tag (e.g. `dsh-v0.1.0-rc.7`).
+/// Returns `None` when there is no tag or git is unavailable.
+pub fn git_tag(dir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["describe", "--tags", "--abbrev=0"])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        String::from_utf8(out.stdout)
+            .ok()
+            .map(|s| s.trim().to_string())
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Kernel manager
 // ---------------------------------------------------------------------------
@@ -219,11 +239,16 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let version = match &inner.kernel_dir {
+            Some(dir) if is_kernel_dir(dir) => git_tag(dir),
+            _ => None,
+        };
         let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
+            version,
             dirty,
             valid,
         }
@@ -237,11 +262,16 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let version = match &inner.kernel_dir {
+            Some(dir) if is_kernel_dir(dir) => git_tag(dir),
+            _ => None,
+        };
         let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
+            version,
             dirty,
             valid,
         }
@@ -256,11 +286,16 @@ impl KernelManager {
             Some(dir) if is_kernel_dir(dir) => git_revision(dir),
             _ => (None, false),
         };
+        let version = match &inner.kernel_dir {
+            Some(dir) if is_kernel_dir(dir) => git_tag(dir),
+            _ => None,
+        };
         let valid = inner.kernel_dir.as_ref().map(|d| is_kernel_dir(d)).unwrap_or(false);
         Some(KernelInfo {
             status: inner.status.clone(),
             kernel_dir: inner.kernel_dir.clone(),
             revision,
+            version,
             dirty,
             valid,
         })
