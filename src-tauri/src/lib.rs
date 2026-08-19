@@ -6,6 +6,7 @@ mod logfile;
 mod plugin;
 mod proxy;
 mod settings;
+mod superpowers_plugin;
 mod terminal;
 mod theme;
 mod tray;
@@ -63,6 +64,14 @@ pub fn run() {
             kernel::kill_stale_owned();
             theme::start_watcher(app.handle().clone());
             let _ = tray::setup_tray(app.handle());
+            // Extract the bundled superpowers ZCode plugin to the user's plugin
+            // directory so ZCode discovers and loads it automatically.
+            // Non-fatal: if extraction fails the app keeps running without it.
+            let _ = std::thread::spawn(|| {
+                if let Err(e) = superpowers_plugin::ensure_installed() {
+                    eprintln!("[superpowers] bundle extract warning: {e}");
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
