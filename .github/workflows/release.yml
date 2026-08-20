@@ -29,13 +29,22 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set Cargo.toml version from tag
+      - name: Set version from tag (Cargo.toml + tauri.conf.json)
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
+          # Cargo.toml (Rust crate version)
           sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
           grep '^version' src-tauri/Cargo.toml
+          # tauri.conf.json (app bundle / DMG name)
+          python3 -c "
+  import json, sys
+  p = 'src-tauri/tauri.conf.json'
+  d = json.load(open(p))
+  d['version'] = '$VERSION'
+  json.dump(d, open(p, 'w'), indent=2, ensure_ascii=False)
+  print(f'tauri.conf.json → version {d[\"version\"]}')"
 
       - name: Build (frontend + app + dmg)
         run: npm install && npm run tauri build
