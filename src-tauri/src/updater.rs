@@ -215,8 +215,15 @@ pub async fn apply_update(
     run_streaming(app, &dir, &path_env, &pnpm, &["install"]).await?;
 
     // 3. Rebuild (produces the web client bundle).
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build ==" }));
-    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build"]).await?;
+    //    pnpm v11 sets `npm_execpath` to a native @pnpm/exe binary path;
+    //    the kernel's build.ts re-spawns that path as a JS script and crashes.
+    //    Run the three build steps individually to avoid build.ts entirely.
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:host ==" }));
+    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:host"]).await?;
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:client ==" }));
+    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:client"]).await?;
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:web  ==" }));
+    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:web"]).await?;
 
     let rev = crate::kernel::git_revision(&dir).0.unwrap_or_else(|| "?".into());
     let _ = app.emit(
@@ -291,8 +298,12 @@ pub async fn install_kernel(
             eprintln!("[updater] adopting existing checkout, needs_build = {needs}");
             if needs {
                 let (pnpm, path_env) = resolve_toolchain().await?;
-                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，执行 pnpm run build ==" }));
-                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build"]).await?;
+                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 lib:host ==" }));
+                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:host"]).await?;
+                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 lib:client ==" }));
+                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:client"]).await?;
+                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 web  ==" }));
+                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:web"]).await?;
             }
             manager.set_kernel_dir(target_dir).await?;
             return Ok(());
@@ -338,8 +349,12 @@ pub async fn install_kernel(
 
     let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm install ==" }));
     run_streaming(app, &target_dir, &path_env, &pnpm, &["install"]).await?;
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build ==" }));
-    run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build"]).await?;
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:host ==" }));
+    run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:host"]).await?;
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:client  ==" }));
+    run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:client"]).await?;
+    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:web    ==" }));
+    run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:web"]).await?;
 
     manager.set_kernel_dir(target_dir).await?;
     let _ = app.emit(

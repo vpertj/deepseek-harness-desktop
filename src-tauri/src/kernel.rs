@@ -83,9 +83,14 @@ pub async fn resolve_toolchain() -> Result<(String, String), String> {
 
     // 1. Fast path: well-known locations (covers mise/nvm/homebrew without
     //    spawning a login shell). This is the common case.
+    //    Prefer the JS-based pnpm over mise shims: mise's pnpm sets
+    //    `npm_execpath` to a native binary (the @pnpm/exe shim), which
+    //    breaks `build.ts` — it tries to run that binary path as JS.
     let mut found: Option<String> = None;
     let mut shell_path = String::new();
     for candidate in [
+        // JS-based pnpm — always safe; avoids the @pnpm/exe binary trap.
+        format!("{home}/Library/pnpm/bin/pnpm"),
         format!("{home}/.local/share/mise/shims/pnpm"),
         format!("{home}/.local/share/pnpm/pnpm"),
         format!("{home}/.npm-global/bin/pnpm"),
@@ -127,6 +132,8 @@ pub async fn resolve_toolchain() -> Result<(String, String), String> {
         dirs.push(parent.display().to_string());
     }
     for extra in [
+        format!("{home}/Library/pnpm/bin"),
+        format!("{home}/Library/pnpm"),
         format!("{home}/.local/share/mise/shims"),
         format!("{home}/.local/share/pnpm"),
         format!("{home}/.npm-global/bin"),
