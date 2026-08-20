@@ -23,6 +23,10 @@ jobs:
       # and filename — otherwise every tag bundles as the hardcoded Cargo.toml
       # version (0.1.18) and later releases get a 404 on app-update download.
       TAURI_ENV_VERSION: ${{ github.ref_name }}
+      # Explicit SDKROOT avoids macOS SDK 26.5 resolving the wrong framework
+      # path for the objc notification crate (Cocoa/Cocoa.h not found).
+      SDKROOT: macosx
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
 
     steps:
       - uses: actions/checkout@v4
