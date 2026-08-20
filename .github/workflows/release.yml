@@ -11,6 +11,13 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      # Pass the git tag version (strip leading "v") into the Tauri build so
+      # the resulting .app and .dmg carry the right version in their bundle ID
+      # and filename — otherwise every tag bundles as the hardcoded Cargo.toml
+      # version (0.1.18) and later releases get a 404 on app-update download.
+      TAURI_ENV_VERSION: ${{ github.ref_name }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +28,14 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Set Cargo.toml version from tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
+          rm -f src-tauri/Cargo.toml.bak
+          grep '^version' src-tauri/Cargo.toml
 
       - name: Build (frontend + app + dmg)
         run: npm install && npm run tauri build
