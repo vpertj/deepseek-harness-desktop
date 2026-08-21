@@ -1093,8 +1093,8 @@
     background: var(--surface-2);
   }
   .pill-running {
-    background: rgba(52, 211, 153, 0.1);
-    border-color: rgba(52, 211, 153, 0.25);
+    background: rgba(52, 211, 153, 0.18);
+    border: 1px solid rgba(52, 211, 153, 0.4);
   }
   .pill-starting {
     background: rgba(251, 191, 36, 0.1);
@@ -1105,15 +1105,16 @@
     border-color: rgba(248, 113, 113, 0.25);
   }
   .dot {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: #6b7280;
     flex-shrink: 0;
   }
   .dot-running {
     background: #34d399;
-    box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+    animation: breathe 2s ease-in-out infinite;
   }
   .dot-starting {
     background: #fbbf24;
@@ -1122,12 +1123,14 @@
   }
   .dot-error {
     background: #f87171;
-    box-shadow: 0 0 6px rgba(248, 113, 113, 0.7);
+    box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
   }
   @keyframes pulse {
-    50% {
-      opacity: 0.3;
-    }
+    50% { opacity: 0.3; }
+  }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 6px rgba(52, 211, 153, 0.6); }
+    50%       { box-shadow: 0 0 14px rgba(52, 211, 153, 1); }
   }
   .status-text {
     font-size: 12px;
@@ -1135,15 +1138,20 @@
     color: var(--text);
     white-space: nowrap;
   }
+  .pill-running .status-text {
+    color: #34d399;
+    font-weight: 600;
+  }
   .pill-arrow {
-    opacity: 0;
-    color: rgba(52, 211, 153, 0.7);
-    transform: translateX(-2px);
-    transition: opacity 0.2s, transform 0.2s;
+    color: rgba(52, 211, 153, 0.85);
+    opacity: 0.85;
+    transform: translateX(0);
+    transition: opacity 0.15s, transform 0.15s;
+    flex-shrink: 0;
   }
   .pill-running:hover .pill-arrow {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateX(2px);
   }
   /* 齿轮按钮 */
   .btn-gear {
