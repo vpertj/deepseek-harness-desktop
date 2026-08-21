@@ -17,8 +17,11 @@ pub struct AppUpdateInfo {
 /// Uses `git ls-remote` (git protocol) instead of the GitHub REST API so the
 /// check never hits the unauthenticated API rate limit. Silent auto-install
 /// needs a signed binary, so we surface the update and open the release page.
-pub async fn check_app_update() -> Result<AppUpdateInfo, String> {
-    let current = env!("CARGO_PKG_VERSION").to_string();
+pub async fn check_app_update(app: &tauri::AppHandle) -> Result<AppUpdateInfo, String> {
+    // Read the runtime version from the Tauri bundle (from tauri.conf.json),
+    // not the compile-time CARGO_PKG_VERSION which becomes stale after any
+    // in-place update replaces the binary.
+    let current = app.package_info().version.to_string();
     let url = format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest");
 
     let tags = tokio::time::timeout(
@@ -89,8 +92,8 @@ pub fn version_newer(newer: &str, older: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn app_update_check() -> Result<AppUpdateInfo, String> {
-    check_app_update().await
+pub async fn app_update_check(app: AppHandle) -> Result<AppUpdateInfo, String> {
+    check_app_update(&app).await
 }
 
 /// Download the latest release dmg, mount it, and hand a replace-and-relaunch
@@ -99,7 +102,7 @@ pub async fn app_update_check() -> Result<AppUpdateInfo, String> {
 /// full in-app auto-update without a code-signing certificate.
 #[tauri::command]
 pub async fn app_download_update(app: AppHandle) -> Result<(), String> {
-    let info = check_app_update().await?;
+    let info = check_app_update(&app).await?;
     if !info.update_available {
         return Err("当前已是最新版本".to_string());
     }
