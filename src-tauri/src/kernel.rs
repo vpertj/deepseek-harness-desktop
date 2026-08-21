@@ -522,7 +522,7 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(format!(
-            "cd '{}' && exec '{}' dsh web --port {port} --trusted-host 127.0.0.1:{}",
+            "cd '{}' && exec '{}' dsh web --no-open --port {port} --trusted-host 127.0.0.1:{}",
             dir.display(),
             pnpm,
             crate::proxy::PROXY_PORT
