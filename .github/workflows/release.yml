@@ -90,11 +90,11 @@ jobs:
         run: |
           $TAG = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
           $VERSION = $TAG -replace '^v', ''
-          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml
+          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml -Encoding UTF8
           Write-Host "Cargo.toml version:"; Get-Content src-tauri/Cargo.toml | Select-String '^version'
           $Json = Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json
           $Json.version = $VERSION
-          $Json | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+          $Json | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json -Encoding UTF8
           Write-Host "tauri.conf.json version: $($Json.version)"
         shell: pwsh
 
