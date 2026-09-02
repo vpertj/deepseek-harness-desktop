@@ -14,6 +14,7 @@ mod tray;
 mod updater;
 
 use kernel::KernelManager;
+use tauri::Manager;
 
 /// Remove Gatekeeper quarantine from our own .app bundle. The app is signed
 /// ad-hoc (no paid Developer ID), so the first launch after download requires
@@ -52,11 +53,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(KernelManager::default())
-        .on_window_event(|_window, event| {
+        .on_window_event(|window, event| {
             // Single-window app: closing the window means quitting. Kill the
             // kernel we spawned so no orphaned dsh web processes survive.
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 kernel::kill_stale_owned();
+                window.app_handle().exit(0);
             }
         })
         .setup(|app| {

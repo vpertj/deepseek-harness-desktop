@@ -233,16 +233,27 @@ fn hdiutil_detach(mount: &str) -> Result<(), String> {
         .map_err(|e| format!("卸载 dmg 失败: {e}"))
 }
 
-/// Build the install script: wait for the old app to exit, swap in the new
-/// .app, strip quarantine, register it with LaunchServices, then relaunch
-/// (with retries — right after a swap LaunchServices may not know the app yet).
+/// Build the install script: wait for the old app to exit (up to 30 s), then
+/// swap in the new .app, strip quarantine, register it with LaunchServices,
+/// and relaunch (with retries — right after a swap LaunchServices may not know
+/// the app yet).  The 30 s timeout handles the edge case where the old binary
+/// stays alive longer than expected (e.g. after a failed exit).
 fn install_script(mounted_app: &std::path::Path, mount: &str, version: &str) -> String {
     let app_path = "/Applications/deepseek-harness-desktop.app";
     let mounted = mounted_app.display().to_string();
     format!(
         r#"#!/bin/sh
 # auto-update to v{version}
-while pgrep -f "Contents/MacOS/deepseek-harness-desktop" > /dev/null 2>&1; do sleep 1; done
+# Wait for the running app to exit (it should have quit when the window closed).
+deadline=$(( $(date +%s) + 30 ))
+while [ $(date +%s) -lt $deadline ]; do
+  if ! pgrep -f "Contents/MacOS/deepseek-harness-desktop" > /dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+# If still running, force-kill (shouldn't happen in normal flow).
+pgrep -f "Contents/MacOS/deepseek-harness-desktop" | xargs -r kill -9 2>/dev/null
 sleep 1
 rm -rf "{app_path}"
 ditto "{mounted}" "{app_path}"
@@ -258,6 +269,7 @@ while [ $i -lt 5 ]; do
   i=$((i + 1))
   sleep 2
 done
+exit 1
 "#
     )
 }
