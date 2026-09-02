@@ -91,22 +91,18 @@ jobs:
           $TAG = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
           $VERSION = $TAG -replace '^v', ''
           python3 -c "
-  import re, sys
-  p = 'src-tauri/Cargo.toml'
-  c = open(p).read()
-  c = re.sub(r'^(version = \").*?(\"\$)', r'\g<1>' + sys.argv[1] + r'\2', c, count=1, flags=re.MULTILINE)
-  open(p, 'w', encoding='utf-8').write(c)
-  print('Cargo.toml:', [l for l in c.splitlines() if l.startswith('version')][0])
-  " "$VERSION"
+import re, sys
+p = 'src-tauri/Cargo.toml'
+c = open(p).read()
+c = re.sub(r'^(version = \").*?(\"\$)', r'\g<1>' + sys.argv[1] + r'\2', c, count=1, flags=re.MULTILINE)
+open(p, 'w', encoding='utf-8').write(c)
+print('Cargo.toml:', [l for l in c.splitlines() if l.startswith('version')][0])
+" "$VERSION"
           python3 -c "
-  import json, sys
-  p = 'src-tauri/tauri.conf.json'
-  d = json.load(open(p))
-  d['version'] = sys.argv[1]
-  open(p, 'w', encoding='utf-8').write(json.dumps(d, indent=2, ensure_ascii=False))
-  print('tauri.conf.json -> version', d['version'])
-  " "$VERSION"
-        shell: pwsh
+import json, sys
+p = 'src-tauri/tauri.conf.json'
+d = json.load(open(p))
+d['version'] = sys.argv[1]
 open(p, 'w', encoding='utf-8').write(json.dumps(d, indent=2, ensure_ascii=False))
 print('tauri.conf.json -> version', d['version'])
 " "$VERSION"
