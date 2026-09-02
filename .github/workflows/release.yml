@@ -89,9 +89,9 @@ jobs:
         shell: pwsh
 
       - name: Install MSVC toolchain
-        uses: rlalik/setup-cpp-msvc@master
-        with:
-          architecture: x64
+        run: |
+          # Windows 2025 runner has MSVC pre-installed; no extra action needed.
+          Write-Host "MSVC toolchain already available on windows-2025"
 
       - name: Build (frontend + app + nsis)
         run: npm install && npm run tauri build
