@@ -90,26 +90,11 @@ jobs:
         run: |
           $TAG = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
           $VERSION = $TAG -replace '^v', ''
-          $script = @'
-  import re, sys
-  p = 'src-tauri/Cargo.toml'
-  c = open(p).read()
-  c = re.sub(r'^(version = ").*?("$)', r'\g<1>' + sys.argv[1] + r'\2', c, count=1, flags=re.MULTILINE)
-  open(p, 'w', encoding='utf-8').write(c)
-  print('Cargo.toml:', [l for l in c.splitlines() if l.startswith('version')][0])
-'@
-          $script2 = @'
-  import json, sys
-  p = 'src-tauri/tauri.conf.json'
-  d = json.load(open(p))
-  d['version'] = sys.argv[1]
-  open(p, 'w', encoding='utf-8').write(json.dumps(d, indent=2, ensure_ascii=False))
-  print('tauri.conf.json -> version', d['version'])
-'@
-          $script | Out-File -FilePath $env:TEMP\set-version.py -Encoding UTF8
-          $script2 | Out-File -FilePath $env:TEMP\set-version2.py -Encoding UTF8
-          python3 $env:TEMP\set-version.py "$VERSION"
-          python3 $env:TEMP\set-version2.py "$VERSION"
+          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".+"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml
+          $Json = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $Json.version = $VERSION
+          $Json | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+          Write-Host "Version set to $VERSION"
         shell: pwsh
 
       - name: Install MSVC toolchain
