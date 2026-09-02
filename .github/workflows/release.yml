@@ -87,14 +87,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Set version from tag (Cargo.toml + tauri.conf.json)
-        run: |
-          $TAG = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
-          $VERSION = $TAG -replace '^v', ''
-          # Use bash (available via Git) to avoid PowerShell TOML corruption
-          bash -c "sed -i.bak 's/^version = \".*\"/version = \"$VERSION\"/' src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak"
-          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const d=JSON.parse(fs.readFileSync(p));d.version='$VERSION';fs.writeFileSync(p,JSON.stringify(d,null,2))"
-          Write-Host "Version set to $VERSION"
-        shell: pwsh
+        run: node -e "const fs=require('fs');const v=require('child_process').execSync('git describe --tags --abbrev=0 2>/dev/null || echo $TAG').toString().trim().replace(/^v/,'')||process.argv[1];const p='src-tauri/Cargo.toml';let c=fs.readFileSync(p).toString();c=c.replace(/^version = \".*\"/m,'version = \"'+v+'\"');fs.writeFileSync(p,c);const j=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json'));j.version=v;fs.writeFileSync('src-tauri/tauri.conf.json',JSON.stringify(j,null,2));console.log('Version:',v)" "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
+        shell: bash
 
       - name: Install MSVC toolchain
         run: |
