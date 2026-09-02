@@ -29,7 +29,9 @@ jobs:
       # the resulting .app and .dmg carry the right version in their bundle ID
       # and filename — otherwise every tag bundles as the hardcoded Cargo.toml
       # version and later releases get a 404 on app-update download.
-      TAURI_ENV_VERSION: ${{ env.BUILD_TAG }}
+      # On push: github.ref_name is e.g. v0.1.26.
+      # On dispatch: inputs.tag is e.g. v0.1.26.
+      TAURI_ENV_VERSION: ${{ github.ref_name != '' && github.ref_name || inputs.tag }}
       # Explicit SDKROOT avoids macOS SDK 26.5 resolving the wrong framework
       # path for the objc notification crate (Cocoa/Cocoa.h not found).
       SDKROOT: macosx
@@ -48,7 +50,7 @@ jobs:
 
       - name: Set version from tag (Cargo.toml + tauri.conf.json)
         run: |
-          TAG="${{ env.BUILD_TAG }}"
+          TAG="${{ github.ref_name != '' && github.ref_name || inputs.tag }}"
           VERSION="${TAG#v}"
           sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
@@ -69,7 +71,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      TAURI_ENV_VERSION: ${{ env.BUILD_TAG }}
+      TAURI_ENV_VERSION: ${{ github.ref_name != '' && github.ref_name || inputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +86,7 @@ jobs:
 
       - name: Set version from tag (Cargo.toml + tauri.conf.json)
         run: |
-          $TAG = "${{ env.BUILD_TAG }}"
+          $TAG = "${{ github.ref_name != '' && github.ref_name || inputs.tag }}"
           $VERSION = $TAG -replace '^v', ''
           (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml
           Write-Host "Cargo.toml version:"; Get-Content src-tauri/Cargo.toml | Select-String '^version'
