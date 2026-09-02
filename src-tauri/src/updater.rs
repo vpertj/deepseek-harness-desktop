@@ -218,12 +218,28 @@ pub async fn apply_update(
     //    pnpm v11 sets `npm_execpath` to a native @pnpm/exe binary path;
     //    the kernel's build.ts re-spawns that path as a JS script and crashes.
     //    Run the three build steps individually to avoid build.ts entirely.
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:host ==" }));
-    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:host"]).await?;
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:lib:client ==" }));
-    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:client"]).await?;
-    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== pnpm run build:web  ==" }));
-    run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:web"]).await?;
+    //
+    //    Resilience: if the upstream kernel has a transient build break (missing
+    //    exports etc.) but the existing dist/ is still valid, skip rebuilding so
+    //    the update itself succeeds and the kernel keeps working.
+    let needs_rebuild = needs_build(&dir);
+    if needs_rebuild {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，执行重建 ==" }));
+        let lib_host_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:host"]).await;
+        let lib_client_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:client"]).await;
+        let web_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:web"]).await;
+        if lib_host_r.is_err() || lib_client_r.is_err() || web_r.is_err() {
+            // Rebuild failed — check whether the dist is still usable. If it is,
+            // carry on so the git pull itself counts as a successful update.
+            let still_valid = !needs_build(&dir);
+            if !still_valid {
+                return Err("内核源码已更新但构建失败（上游 build 报错）。当前内核目录的构建产物已过期，请等待上游修复后重试，或手动在终端运行 `pnpm run build`。".to_string());
+            }
+            let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 构建有报错，但现有产物仍可用，更新继续 ==" }));
+        }
+    } else {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 构建产物完整，跳过重建 ==" }));
+    }
 
     let rev = crate::kernel::git_revision(&dir).0.unwrap_or_else(|| "?".into());
     let _ = app.emit(

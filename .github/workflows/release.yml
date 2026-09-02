@@ -14,14 +14,17 @@ on:
 permissions:
   contents: write
 
+env:
+  NODE_VERSION: '22'
+
 jobs:
-  build:
+  build-macos:
     runs-on: macos-latest
     env:
       # Pass the git tag version (strip leading "v") into the Tauri build so
       # the resulting .app and .dmg carry the right version in their bundle ID
       # and filename — otherwise every tag bundles as the hardcoded Cargo.toml
-      # version (0.1.18) and later releases get a 404 on app-update download.
+      # version and later releases get a 404 on app-update download.
       TAURI_ENV_VERSION: ${{ github.ref_name }}
       # Explicit SDKROOT avoids macOS SDK 26.5 resolving the wrong framework
       # path for the objc notification crate (Cocoa/Cocoa.h not found).
@@ -34,7 +37,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -43,11 +46,9 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
-          # Cargo.toml (Rust crate version)
           sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" src-tauri/Cargo.toml
           rm -f src-tauri/Cargo.toml.bak
           grep '^version' src-tauri/Cargo.toml
-          # tauri.conf.json (app bundle / DMG name)
           python3 -c "
   import json, sys
   p = 'src-tauri/tauri.conf.json'
@@ -59,10 +60,53 @@ jobs:
       - name: Build (frontend + app + dmg)
         run: npm install && npm run tauri build
 
-      - name: Upload artifacts
+      - name: Upload macOS artifacts
         uses: softprops/action-gh-release@v2
         with:
           files: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.app
           generate_release_notes: true
+
+  build-windows:
+    runs-on: windows-latest
+    env:
+      TAURI_ENV_VERSION: ${{ github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set version from tag (Cargo.toml + tauri.conf.json)
+        run: |
+          $TAG = "${{ github.ref_name }}"
+          $VERSION = $TAG -replace '^v', ''
+          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".*"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml
+          Write-Host "Cargo.toml version:"; Get-Content src-tauri/Cargo.toml | Select-String '^version'
+          $Json = Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json
+          $Json.version = $VERSION
+          $Json | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+          Write-Host "tauri.conf.json version: $($Json.version)"
+        shell: pwsh
+
+      - name: Install MSVC toolchain
+        uses: rlalik/setup-cpp-msvc@master
+        with:
+          architecture: x64
+
+      - name: Build (frontend + app + nsis)
+        run: npm install && npm run tauri build
+
+      - name: Upload Windows artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+          generate_release_notes: false

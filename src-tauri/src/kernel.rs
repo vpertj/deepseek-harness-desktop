@@ -470,7 +470,10 @@ impl KernelManager {
         Ok(port)
     }
 
-    /// Terminate the kernel process group (SIGTERM, then SIGKILL after 5s).
+    /// Terminate the kernel process. On Unix the process runs in its own
+    /// process group so we can kill the whole tree with one signal; on Windows
+    /// we fall back to killing the direct child (the pnpm wrapper), which
+    /// also terminates the node subprocess.
     pub async fn stop(&self) -> Result<(), String> {
         crate::proxy::set_kernel_port(0);
         let mut inner = self.inner.lock().await;
@@ -480,6 +483,8 @@ impl KernelManager {
         };
         let pid = child.id().ok_or("子进程无 PID")? as i32;
         drop(inner);
+        // Try to kill the whole process group on Unix; on Windows this is a
+        // no-op and we rely on child.kill() below.
         #[cfg(unix)]
         unsafe {
             libc::kill(-pid, libc::SIGTERM);
@@ -519,14 +524,27 @@ impl KernelManager {
 /// The process tree gets its own process group (so it can be killed wholesale).
 pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::Child, String> {
     let (pnpm, path_env) = resolve_toolchain().await?;
+    let pnpm_esc = pnpm.replace("'", "'\\''");
+    let dir_esc = dir.display().to_string().replace("'", "'\\''");
+    #[cfg(unix)]
+    let cmd_str = format!(
+        "cd '{dir_esc}' && exec '{pnpm_esc}' dsh web --no-open --port {port} --trusted-host 127.0.0.1:{}",
+        crate::proxy::PROXY_PORT
+    );
+    #[cfg(windows)]
+    let cmd_str = format!(
+        "cd /d \"{}\" && \"{}\" dsh web --no-open --port {} --trusted-host 127.0.0.1:{}",
+        dir.display(),
+        pnpm,
+        port,
+        crate::proxy::PROXY_PORT,
+    );
+    #[cfg(unix)]
     let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(format!(
-            "cd '{}' && exec '{}' dsh web --no-open --port {port} --trusted-host 127.0.0.1:{}",
-            dir.display(),
-            pnpm,
-            crate::proxy::PROXY_PORT
-        ))
+    #[cfg(windows)]
+    let mut cmd = Command::new("cmd");
+    cmd.arg("/c")
+        .arg(&cmd_str)
         .env("PATH", &path_env)
         .env("DSH_DESKTOP_OWNED", "1")
         .stdout(std::process::Stdio::piped())
@@ -708,19 +726,14 @@ pub async fn kernel_set_active(
 
 /// Kill dsh web processes owned by this app that survived a previous run
 /// (crashed/force-quit leaves them orphaned; each relaunch would otherwise
-/// accumulate another kernel process). The env marker `DSH_DESKTOP_OWNED`
-/// distinguishes our kernels (both the pnpm wrapper and the node dsh web)
-/// from manually started ones.
+/// accumulate another kernel process).
+///
+/// On Unix we grep the process command line for the `DSH_DESKTOP_OWNED` env
+/// marker. On Windows we use `tasklist` + `wmic` to find node/pnpm processes
+/// whose command line contains `dsh web`.
 pub fn kill_stale_owned() {
-    let Ok(out) = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("ps axo pid=,command= -E | grep DSH_DESKTOP_OWNED | grep -v grep | awk '{print $1}'")
-        .output()
-    else {
-        return;
-    };
-    let pids = String::from_utf8_lossy(&out.stdout);
-    for pid in pids.split_whitespace() {
+    let pids = gather_owned_pids();
+    for pid in &pids {
         let _ = std::process::Command::new("kill")
             .arg("-9")
             .arg(pid)
@@ -729,11 +742,54 @@ pub fn kill_stale_owned() {
     }
 }
 
+#[cfg(unix)]
+fn gather_owned_pids() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ps axo pid=,command= -E | grep DSH_DESKTOP_OWNED | grep -v grep | awk '{print $1}'")
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[cfg(windows)]
+fn gather_owned_pids() -> Vec<String> {
+    let mut pids = Vec::new();
+    // Get all processes with their command lines via wmic.
+    let Ok(out) = std::process::Command::new("wmic")
+        .args(["process", "get", "ProcessId,CommandLine"])
+        .output()
+    else {
+        return pids;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // wmic output: "1234  C:\\path\\to\\node.exe ... dsh web ..."
+        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        if let Some(pid_str) = parts.first() {
+            if pid_str.parse::<u32>().is_ok() && line.contains("dsh web") {
+                pids.push(pid_str.to_string());
+            }
+        }
+    }
+    pids
+}
+
 /// Stop `dsh web` instances the user started outside this app (terminal,
 /// scripts, other tools) so the shell takes over the single kernel. Owned
 /// instances (tagged DSH_DESKTOP_OWNED) and this process are skipped.
 /// Kills the whole process tree (pnpm wrapper + node child), not just the
 /// matched parent. Returns the number of processes stopped.
+#[cfg(unix)]
 pub fn kill_external_dsh_web() -> usize {
     let Ok(out) = std::process::Command::new("ps")
         .args(["axo", "pid=,ppid=,command=", "-E"])
@@ -794,6 +850,13 @@ pub fn kill_external_dsh_web() -> usize {
         eprintln!("[kernel] 接管: 停止外部 dsh web pid {pid}");
     }
     killed
+}
+
+/// Windows stub: on Windows users rarely run `dsh web` from an external
+/// terminal in a way that conflicts with the shell, so this is a no-op.
+#[cfg(windows)]
+pub fn kill_external_dsh_web() -> usize {
+    0
 }
 
 #[cfg(test)]
