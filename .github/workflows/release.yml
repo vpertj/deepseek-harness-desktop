@@ -90,10 +90,9 @@ jobs:
         run: |
           $TAG = "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
           $VERSION = $TAG -replace '^v', ''
-          (Get-Content src-tauri/Cargo.toml) -replace 'version = ".+"', "version = `"$VERSION`"" | Set-Content src-tauri/Cargo.toml
-          $Json = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
-          $Json.version = $VERSION
-          $Json | ConvertTo-Json -Depth 10 | Set-Content src-tauri/tauri.conf.json
+          # Use bash (available via Git) to avoid PowerShell TOML corruption
+          bash -c "sed -i.bak 's/^version = \".*\"/version = \"$VERSION\"/' src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak"
+          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const d=JSON.parse(fs.readFileSync(p));d.version='$VERSION';fs.writeFileSync(p,JSON.stringify(d,null,2))"
           Write-Host "Version set to $VERSION"
         shell: pwsh
 
