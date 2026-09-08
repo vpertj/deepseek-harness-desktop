@@ -20,6 +20,8 @@ export interface KernelStatus {
   dirty: boolean;
   /** True when the configured dir is a valid kernel checkout (works without git). */
   valid: boolean;
+  /** Auth token parsed from the kernel's ready line (null until seen). */
+  token: string | null;
 }
 
 export interface UpdateInfo {

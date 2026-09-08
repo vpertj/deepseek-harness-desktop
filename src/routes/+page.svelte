@@ -58,12 +58,17 @@
   // The iframe loads the shell proxy (fixed port 54001), which forwards
   // everything to the kernel but serves host.pickDirectory with the app's
   // native dialog (the kernel's osascript chooser cannot show in-process).
+  // The kernel's trust fence 401s tokenless requests, so the auth token
+  // parsed from the kernel's ready line is appended to the URL; the kernel
+  // then sets its session cookie and subsequent requests authenticate.
   const PROXY_PORT = 54001;
-  const iframeUrl = $derived(
-    s.store.kernel.status.state === "running"
-      ? `http://127.0.0.1:${PROXY_PORT}`
-      : null,
-  );
+  const iframeUrl = $derived.by(() => {
+    if (s.store.kernel.status.state !== "running") return null;
+    const token = s.store.kernel.token;
+    return token
+      ? `http://127.0.0.1:${PROXY_PORT}/?token=${token}`
+      : `http://127.0.0.1:${PROXY_PORT}`;
+  });
 
   const port = $derived(
     s.store.kernel.status.state === "running"

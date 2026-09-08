@@ -21,6 +21,7 @@ export const store = $state({
     revision: null as string | null,
     dirty: false,
     valid: false,
+    token: null as string | null,
   },
   updateInfo: null as api.UpdateInfo | null,
   checkingUpdate: false,
@@ -104,6 +105,7 @@ export async function refreshStatus() {
     store.kernel.revision = s.revision;
     store.kernel.dirty = s.dirty;
     store.kernel.valid = s.valid;
+    store.kernel.token = s.token;
   } catch (e) {
     console.error("kernel_status failed", e);
   }
@@ -198,6 +200,7 @@ export async function wireEvents() {
       const payload = e.payload as Record<string, unknown>;
       if (payload.state === "running") {
         store.kernel.status = { state: "running", port: Number(payload.port) };
+        if (typeof payload.token === "string") store.kernel.token = payload.token;
       } else if (payload.state === "error") {
         store.kernel.status = { state: "error", message: String(payload.message ?? "") };
       } else if (payload.state === "stopped") {
