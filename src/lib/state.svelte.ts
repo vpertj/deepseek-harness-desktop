@@ -52,12 +52,45 @@ async function notifyUpdate(title: string, body: string) {
 
 const MAX_LOGS = 3000;
 
-export function appendLog(stream: "out" | "err", line: string) {
-  store.logs.push({ stream, line, ts: Date.now() });
+// Batch incoming log lines and flush to the reactive store at most every
+// LOG_FLUSH_MS. Bursty output (pnpm install etc.) emits dozens of events per
+// second; pushing each line individually re-renders the log panel and forces
+// a scrollHeight reflow per line. Buffering keeps the DOM update cadence low
+// without changing what is displayed.
+const LOG_FLUSH_MS = 120;
+let logBuf: LogLine[] = [];
+let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushLogs() {
+  logFlushTimer = null;
+  if (logBuf.length === 0) return;
+  const batch = logBuf;
+  logBuf = [];
+  store.logs.push(...batch);
   if (store.logs.length > MAX_LOGS) store.logs.splice(0, store.logs.length - MAX_LOGS);
 }
 
+export function appendLog(stream: "out" | "err", line: string) {
+  logBuf.push({ stream, line, ts: Date.now() });
+  if (logBuf.length >= 200) {
+    if (logFlushTimer !== null) {
+      clearTimeout(logFlushTimer);
+      logFlushTimer = null;
+    }
+    flushLogs();
+    return;
+  }
+  if (logFlushTimer === null) {
+    logFlushTimer = setTimeout(flushLogs, LOG_FLUSH_MS);
+  }
+}
+
 export function clearLogs() {
+  logBuf = [];
+  if (logFlushTimer !== null) {
+    clearTimeout(logFlushTimer);
+    logFlushTimer = null;
+  }
   store.logs.length = 0;
 }
 
