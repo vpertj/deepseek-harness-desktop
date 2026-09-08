@@ -51,15 +51,28 @@ pub fn ensure_started(app: AppHandle) -> Result<(), String> {
     result
 }
 
-/// Shared HTTP agent. Creating an `ureq::Agent` per request throws away its
+/// Shared HTTP agent. Creating an `ureq` per request throws away its
 /// connection pool, so every forwarded request paid fresh connection setup.
 /// One process-wide agent (clone is cheap, pool is shared) reuses
 /// keep-alive connections to the kernel across requests.
+///
+/// Two non-default settings make the proxy transparent:
+/// - `http_status_as_error(false)`: ureq turns 4xx/5xx into `Err` by
+///   default; the kernel's trust fence answers 401 to tokenless probes and
+///   those responses must reach the iframe verbatim.
+/// - `max_redirects(0)`: the kernel's 303 (token → cookie) must be handed
+///   to the browser, not followed internally by ureq.
 static KERNEL_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
 
 fn kernel_agent() -> ureq::Agent {
     KERNEL_AGENT
-        .get_or_init(ureq::Agent::new_with_defaults)
+        .get_or_init(|| {
+            ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .build()
+                .new_agent()
+        })
         .clone()
 }
 

@@ -32,6 +32,11 @@ pub struct KernelInfo {
     /// True when the configured dir looks like a kernel checkout. Works even
     /// without git (a tarball install has no .git but is still valid).
     pub valid: bool,
+    /// Auth token parsed from the kernel's ready line
+    /// (`dsh web: http://127.0.0.1:PORT/?token=...`). The upstream kernel now
+    /// fence-gates every request (401 without it), so the embedded iframe
+    /// needs it in the URL.
+    pub token: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +224,8 @@ struct KernelInner {
     kernel_dir: Option<PathBuf>,
     status: KernelStatus,
     child: Option<tokio::process::Child>,
+    /// Auth token parsed from the kernel's ready line, if seen.
+    token: Option<String>,
 }
 
 impl Default for KernelManager {
@@ -234,6 +241,7 @@ impl Default for KernelManager {
                 kernel_dir: settings.effective_kernel_dir(),
                 status: KernelStatus::Stopped,
                 child: None,
+                token: None,
             })),
         }
     }
@@ -258,6 +266,7 @@ impl KernelManager {
             version,
             dirty,
             valid,
+            token: inner.token.clone(),
         }
     }
 
@@ -281,6 +290,7 @@ impl KernelManager {
             version,
             dirty,
             valid,
+            token: inner.token.clone(),
         }
     }
 
@@ -305,6 +315,7 @@ impl KernelManager {
             version,
             dirty,
             valid,
+            token: inner.token.clone(),
         })
     }
 
@@ -366,6 +377,7 @@ impl KernelManager {
 
         inner.status = KernelStatus::Starting;
         inner.child = None;
+        inner.token = None;
 
         eprintln!("[kernel] spawning dsh web on port {port} in {}", dir.display());
         let spawn_result = spawn_web(&dir, port).await;
@@ -389,9 +401,26 @@ impl KernelManager {
         // Reader tasks: stream log lines + detect exit via stderr EOF.
         let app_log = app.clone();
         let app_err = app.clone();
+        let token_shared = Arc::clone(&shared);
         let out_task = tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // The kernel's ready line carries the auth token:
+                // `dsh web: http://127.0.0.1:PORT/?token=...`. The trust fence
+                // 401s every tokenless request, so the embedded iframe needs
+                // it. Parse once, store for kernel_status/running events.
+                if token_shared.lock().await.token.is_none() {
+                    if let Some(idx) = line.find("token=") {
+                        let raw = &line[idx + "token=".len()..];
+                        let tok: String = raw
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                            .collect();
+                        if !tok.is_empty() {
+                            token_shared.lock().await.token = Some(tok);
+                        }
+                    }
+                }
                 crate::logfile::persist("out", &line);
                 let _ = app_log.emit("kernel-log", serde_json::json!({ "stream": "out", "line": line }));
             }
@@ -420,6 +449,7 @@ impl KernelManager {
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
             if healthy {
+                let token = sup_shared.lock().await.token.clone();
                 sup_shared.lock().await.status = KernelStatus::Running { port };
                 // Point the shell proxy at this kernel and make sure the
                 // proxy listener is up (the iframe loads the proxy port).
@@ -428,7 +458,7 @@ impl KernelManager {
                 crate::tray::refresh_menu(&app_sup);
                 let _ = app_sup.emit(
                     "kernel-status",
-                    serde_json::json!({ "state": "running", "port": port }),
+                    serde_json::json!({ "state": "running", "port": port, "token": token }),
                 );
             } else {
                 sup_shared.lock().await.status = KernelStatus::Error {
@@ -560,7 +590,10 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
     cmd.spawn().map_err(|e| format!("启动内核进程失败: {e}"))
 }
 
-/// Minimal TCP + HTTP probe: connect and check for an HTTP 200 on GET /.
+/// Minimal TCP + HTTP probe: connect and check that the port answers with a
+/// valid HTTP response. Any status counts as healthy — the kernel's trust
+/// fence answers 401 (and the edge 502 during warm-up) to tokenless probes,
+/// so requiring 200 would never flip the kernel to Running.
 async fn tcp_probe(port: u16) -> bool {
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
         return false;
@@ -573,11 +606,11 @@ async fn tcp_probe(port: u16) -> bool {
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 1024];
     let n = match tokio::time::timeout(std::time::Duration::from_secs(3), stream.read(&mut buf)).await {
-        Ok(Ok(n)) => n,
+        Ok(Ok(n)) if n > 0 => n,
         _ => return false,
     };
     let head = String::from_utf8_lossy(&buf[..n]);
-    head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
+    head.starts_with("HTTP/1.1 ") || head.starts_with("HTTP/1.0 ")
 }
 
 // ---------------------------------------------------------------------------
