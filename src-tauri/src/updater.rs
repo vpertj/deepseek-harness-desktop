@@ -382,9 +382,23 @@ pub async fn install_kernel(
 
 /// True when the checkout's build artifacts are missing (lib bundles or web dist).
 /// Used to decide whether an existing checkout needs a rebuild before adopt.
+///
+/// The kernel boots only when EVERY client package has its lib/client.js —
+/// a partial build (or a pull that adds new packages) leaves the old
+/// two-file check happy while the kernel dies at launch with
+/// "client bundles not found; run `pnpm run build`". Check a spread of
+/// client bundles instead, matching the packages the loader composes.
 fn needs_build(dir: &Path) -> bool {
-    !dir.join("packages/typert/registry/lib/client.js").is_file()
-        || !dir.join("apps/web/dist/index.html").is_file()
+    const REQUIRED: &[&str] = &[
+        "packages/typert/registry/lib/client.js",
+        "apps/web/dist/index.html",
+        "packages/client/ui-open-in-app/lib/client.js",
+        "packages/client/ui-sidebar-files/lib/client.js",
+        "packages/client/ui-sidebar-right/lib/client.js",
+        "packages/client/resources/lib/client.js",
+        "packages/api/workspace-files/lib/client.js",
+    ];
+    REQUIRED.iter().any(|f| !dir.join(f).is_file())
 }
 
 // ---------------------------------------------------------------------------
@@ -439,8 +453,23 @@ mod tests {
         std::fs::write(tmp.join("apps/web/dist/index.html"), "<html></html>").unwrap();
         assert!(needs_build(&tmp));
 
-        // Both present -> no rebuild needed.
-        std::fs::write(tmp.join("packages/typert/registry/lib/client.js"), "// client").unwrap();
+        // All required artifacts present -> no rebuild needed.
+        for f in [
+            "packages/typert/registry/lib/client.js",
+            "packages/client/ui-open-in-app/lib/client.js",
+            "packages/client/ui-sidebar-files/lib/client.js",
+            "packages/client/ui-sidebar-right/lib/client.js",
+            "packages/client/resources/lib/client.js",
+            "packages/api/workspace-files/lib/client.js",
+        ] {
+            let p = tmp.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "// stub").unwrap();
+        }
         assert!(!needs_build(&tmp));
+
+        // A partial build (one client bundle missing) -> needs build again.
+        std::fs::remove_file(tmp.join("packages/client/ui-sidebar-files/lib/client.js")).unwrap();
+        assert!(needs_build(&tmp));
     }
 }
