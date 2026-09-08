@@ -51,6 +51,18 @@ pub fn ensure_started(app: AppHandle) -> Result<(), String> {
     result
 }
 
+/// Shared HTTP agent. Creating an `ureq::Agent` per request throws away its
+/// connection pool, so every forwarded request paid fresh connection setup.
+/// One process-wide agent (clone is cheap, pool is shared) reuses
+/// keep-alive connections to the kernel across requests.
+static KERNEL_AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+
+fn kernel_agent() -> ureq::Agent {
+    KERNEL_AGENT
+        .get_or_init(ureq::Agent::new_with_defaults)
+        .clone()
+}
+
 fn handle_request(mut request: tiny_http::Request, app: &AppHandle) -> Result<(), String> {
     let url = request.url().to_string();
     let method = request.method().as_str().to_string();
@@ -89,7 +101,7 @@ fn handle_request(mut request: tiny_http::Request, app: &AppHandle) -> Result<()
         .read_to_end(&mut body)
         .map_err(|e| format!("读取请求体失败: {e}"))?;
 
-    let agent = ureq::Agent::new_with_defaults();
+    let agent = kernel_agent();
     let resp = match method.as_str() {
         "GET" | "HEAD" => {
             let builder = apply_headers(agent.get(&inner_url), request.headers(), port);
