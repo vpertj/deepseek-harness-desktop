@@ -18,9 +18,58 @@ pub const PROXY_PORT: u16 = 54001;
 /// Current kernel port the proxy forwards to (0 = no kernel).
 static KERNEL_PORT: AtomicU16 = AtomicU16::new(0);
 
+/// The kernel's auth cookie (`dsh-auth-<authority-hash>=v1.<payload>`),
+/// captured from the kernel's tokened 303 response.
+///
+/// The cookie is SameSite=Strict and authority-bound to the kernel port, so
+/// a cross-origin iframe (the shell's proxy origin) will not present it on
+/// the redirect that follows the tokened first navigation — the browser
+/// lands on the kernel's 401 "authentication required" body. The proxy
+/// therefore acts as the cookie carrier: capture Set-Cookie, inject it into
+/// every forwarded request and WebSocket upgrade.
+static AUTH_COOKIE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Store the `dsh-auth-...=...` pair (attributes stripped) as the current
+/// auth cookie.
+fn store_auth_cookie(set_cookie_value: &str) {
+    let pair = set_cookie_value.split(';').next().unwrap_or("").trim();
+    if pair.starts_with("dsh-auth-") && pair.contains('=') && pair.len() > "dsh-auth-".len() + 1 {
+        if let Ok(mut slot) = AUTH_COOKIE.lock() {
+            if slot.as_deref() != Some(pair) {
+                eprintln!("[proxy] captured kernel auth cookie");
+            }
+            *slot = Some(pair.to_string());
+        }
+    }
+}
+
+/// The stored cookie pair, if captured.
+fn auth_cookie() -> Option<String> {
+    AUTH_COOKIE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Merge the stored auth cookie into an outgoing Cookie header value.
+/// Keeps any cookies the client already sent.
+fn merge_cookie(incoming: Option<&str>, stored: Option<&str>) -> Option<String> {
+    let stored = stored?;
+    match incoming {
+        Some(existing) if existing.contains("dsh-auth-") => Some(existing.to_string()),
+        Some(existing) if !existing.trim().is_empty() => {
+            Some(format!("{existing}; {stored}"))
+        }
+        _ => Some(stored.to_string()),
+    }
+}
+
 /// Point the proxy at a running kernel (call after spawn, before iframe).
+/// The auth cookie is cleared: it is bound to the previous kernel port's
+/// authority, and a fresh one is captured from the new kernel's first
+/// tokened response.
 pub fn set_kernel_port(port: u16) {
     KERNEL_PORT.store(port, Ordering::SeqCst);
+    if let Ok(mut slot) = AUTH_COOKIE.lock() {
+        *slot = None;
+    }
 }
 
 static PROXY_ONCE: Once = Once::new();
@@ -161,6 +210,11 @@ fn handle_request(mut request: tiny_http::Request, app: &AppHandle) -> Result<()
         if matches!(n.as_str(), "content-length" | "transfer-encoding" | "connection") {
             continue;
         }
+        // Capture the kernel's auth cookie so later requests (including
+        // WebSocket upgrades and cookieless browser navigations) carry it.
+        if n == "set-cookie" {
+            store_auth_cookie(value.to_str().unwrap_or(""));
+        }
         if let Ok(h) = tiny_http::Header::from_bytes(name.as_str(), value.to_str().unwrap_or("")) {
             headers.push(h);
         }
@@ -185,6 +239,7 @@ fn apply_headers<B>(
     headers: &[tiny_http::Header],
     kernel_port: u16,
 ) -> ureq::RequestBuilder<B> {
+    let mut cookie: Option<String> = None;
     let mut b = builder;
     for header in headers {
         let n: &str = header.field.as_str().as_ref();
@@ -199,8 +254,17 @@ fn apply_headers<B>(
             b = b.header("origin", format!("http://127.0.0.1:{kernel_port}"));
             continue;
         }
+        if n == "cookie" {
+            cookie = Some(header.value.as_str().to_string());
+            continue;
+        }
         let v: &str = header.value.as_ref();
         b = b.header(&n, v);
+    }
+    // Inject the captured kernel auth cookie (SameSite=Strict keeps the
+    // browser from sending it on cross-origin iframe navigations).
+    if let Some(merged) = merge_cookie(cookie.as_deref(), auth_cookie().as_deref()) {
+        b = b.header("cookie", &merged);
     }
     b
 }
@@ -217,14 +281,21 @@ fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> 
     // Rebuild the upgrade request for the kernel (keep Upgrade/Sec-WebSocket
     // headers; only drop hop-by-hop Host/Content-Length and rewrite Origin to
     // the kernel authority — the /api trust fence requires Origin == Host).
+    // The captured auth cookie is injected: SameSite=Strict keeps the browser
+    // from sending it on cross-origin iframe requests.
     let mut req = format!(
         "{} {} HTTP/1.1\r\n",
         request.method().as_str(),
         request.url()
     );
+    let mut incoming_cookie: Option<String> = None;
     for h in request.headers() {
         let n: &str = h.field.as_str().as_ref();
         if n.eq_ignore_ascii_case("host") || n.eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        if n.eq_ignore_ascii_case("cookie") {
+            incoming_cookie = Some(h.value.as_str().to_string());
             continue;
         }
         let v: &str = h.value.as_ref();
@@ -233,6 +304,9 @@ fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> 
             continue;
         }
         req += &format!("{}: {}\r\n", n, v);
+    }
+    if let Some(merged) = merge_cookie(incoming_cookie.as_deref(), auth_cookie().as_deref()) {
+        req += &format!("Cookie: {merged}\r\n");
     }
     req += &format!("Host: 127.0.0.1:{port}\r\n\r\n");
     kernel
