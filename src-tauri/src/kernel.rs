@@ -543,8 +543,14 @@ pub(crate) async fn spawn_web(dir: &Path, port: u16) -> Result<tokio::process::C
     let mut cmd = Command::new("sh");
     #[cfg(windows)]
     let mut cmd = Command::new("cmd");
-    cmd.arg("/c")
-        .arg(&cmd_str)
+    // Shell flag is platform-specific: `sh -c` vs `cmd /c`. It used to be a
+    // shared `.arg("/c")`, which broke Unix (sh treated /c as a script name
+    // and the kernel child died instantly with "sh: /c: No such file...").
+    #[cfg(unix)]
+    cmd.arg("-c");
+    #[cfg(windows)]
+    cmd.arg("/c");
+    cmd.arg(&cmd_str)
         .env("PATH", &path_env)
         .env("DSH_DESKTOP_OWNED", "1")
         .stdout(std::process::Stdio::piped())
@@ -589,9 +595,23 @@ pub async fn kernel_status(manager: tauri::State<'_, KernelManager>) -> Result<K
 /// creates the workspace through the kernel's own HTTP API.
 #[tauri::command]
 pub async fn pick_workspace_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri::Manager;
     use tauri_plugin_dialog::DialogExt;
-    let picked = app.dialog().file().blocking_pick_folder();
-    Ok(picked.map(|p| p.to_string()))
+    // Non-blocking pick_folder + channel (same as proxy.rs): the blocking
+    // variant deadlocks on macOS here — AppKit dialogs need the main thread,
+    // and blocking an async runtime thread on it freezes the app.
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let mut builder = app.dialog().file();
+    if let Some(window) = app.get_webview_window("main") {
+        builder = builder.set_parent(&window);
+    }
+    builder.pick_folder(move |picked| {
+        let _ = tx.send(picked.map(|p| p.to_string()));
+    });
+    let picked = rx
+        .recv_timeout(std::time::Duration::from_secs(120))
+        .unwrap_or(None);
+    Ok(picked)
 }
 
 #[tauri::command]
