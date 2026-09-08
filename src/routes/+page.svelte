@@ -330,6 +330,10 @@
     if (appUpdate?.url && !appUpdating) void openUrl(appUpdate.url);
   }
 
+  // In-app auto-update (dmg swap + relaunch) is macOS-only; other platforms
+  // fall back to opening the GitHub release page.
+  const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+
   async function doAutoUpdate() {
     if (!appUpdate?.update_available || appUpdating) return;
     appUpdating = true;
@@ -433,6 +437,8 @@
   $effect(() => {
     const canInit = termOpen && !!termEl;
     if (!canInit) return;
+    // canInit guarantees termEl is mounted; narrow the type for TS.
+    const termElEl = termEl as HTMLDivElement;
     // Lazily create the xterm instance once the panel is mounted.
     if (!termInstance) {
       const isLight = document.documentElement.classList.contains("theme-light");
@@ -446,7 +452,7 @@
       });
       termFit = new FitAddon();
       termInstance.loadAddon(termFit);
-      termInstance.open(termEl);
+      termInstance.open(termElEl);
       termFit.fit();
       termInstance.focus();
 
@@ -481,7 +487,7 @@
     };
     resize();
     const ro = new ResizeObserver(resize);
-    ro.observe(termEl);
+    ro.observe(termElEl);
     return () => {
       ro.disconnect();
     };
@@ -928,20 +934,31 @@
                   <div>
                     <strong>发现新版本 v{appUpdate.latest}</strong>
                     <p>
-                      {appUpdating
-                        ? appUpdatePhase === "ready"
-                          ? "更新已就绪，正在重启应用…"
-                          : "正在下载更新，请稍候…"
-                        : `当前版本 v${appUpdate.current}，可一键自动更新。`}
+                      {isMac
+                        ? appUpdating
+                          ? appUpdatePhase === "ready"
+                            ? "更新已就绪，正在重启应用…"
+                            : "正在下载更新，请稍候…"
+                          : `当前版本 v${appUpdate.current}，可一键自动更新。`
+                        : `当前版本 v${appUpdate.current}，请前往发布页下载安装包。`}
                     </p>
                   </div>
-                  <button
-                    class="btn btn-primary"
-                    onclick={doAutoUpdate}
-                    disabled={appUpdating}
-                  >
-                    {appUpdating ? (appUpdatePhase === "ready" ? "准备重启…" : "下载中…") : "立即更新"}
-                  </button>
+                  {#if isMac}
+                    <button
+                      class="btn btn-primary"
+                      onclick={doAutoUpdate}
+                      disabled={appUpdating}
+                    >
+                      {appUpdating ? (appUpdatePhase === "ready" ? "准备重启…" : "下载中…") : "立即更新"}
+                    </button>
+                  {:else}
+                    <button
+                      class="btn btn-primary"
+                      onclick={goDownload}
+                    >
+                      打开发布页
+                    </button>
+                  {/if}
                 </div>
               {/if}
               <div class="field">
