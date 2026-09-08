@@ -172,75 +172,12 @@ pub fn check_env() -> EnvStatus {
     }
 }
 
-/// Auto-install missing toolchain: mise install + activate node@24, then
-/// corepack enable pnpm. Falls back to Homebrew when mise is unavailable.
-/// Returns the post-install environment status.
+/// Auto-install missing toolchain. Kept as a separate command for API
+/// compatibility, but the logic is deliberately the single implementation
+/// in `env_setup_auto` (streaming progress, multi-fallback pnpm install).
 #[tauri::command]
 pub async fn install_env(app: tauri::AppHandle) -> Result<EnvStatus, String> {
-    let dirs = candidate_paths();
-    let mise = find_in(&dirs, "mise");
-    let brew = find_in(&dirs, "brew");
-
-    if mise.is_some() {
-        let mise_bin = mise.unwrap();
-        eprintln!("[env] installing node@24 via mise");
-        let out = Command::new(&mise_bin)
-            .args(["install", "node@24"])
-            .output()
-            .map_err(|e| format!("mise install 失败: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "mise install node@24 失败: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        let out = Command::new(&mise_bin)
-            .args(["use", "-g", "node@24"])
-            .output()
-            .map_err(|e| format!("mise use 失败: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "mise use -g node@24 失败: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-    } else if let Some(brew_bin) = brew {
-        eprintln!("[env] installing node via homebrew");
-        let out = Command::new(&brew_bin)
-            .args(["install", "node"])
-            .output()
-            .map_err(|e| format!("brew install node 失败: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "brew install node 失败: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-    } else {
-        return Err("未找到 mise 或 Homebrew，无法自动安装 Node.js。请手动安装后重试。".into());
-    }
-
-    // Either mise or brew installed node successfully (or returned an error above).
-    // Now ensure pnpm is enabled via corepack.
-    if let Some(corepack_bin) = find_in(&dirs, "corepack") {
-        let _ = crate::updater::run_streaming(
-            &app,
-            Path::new("."),
-            &full_path_env(),
-            &corepack_bin.display().to_string(),
-            &["enable", "pnpm"],
-        )
-        .await;
-    }
-
-    let status = check_env();
-    if !status.ready {
-        return Err(format!(
-            "安装后环境仍不满足：node={:?} pnpm={:?}",
-            status.node.version, status.pnpm.version
-        ));
-    }
-    Ok(status)
+    env_setup_auto(app).await
 }
 
 /// Build a comprehensive PATH string from candidate paths, ensuring system
@@ -305,6 +242,19 @@ fn stream_child(app: &AppHandle, child: std::process::Child, label: &str) -> Res
     } else {
         Err(format!("{label} 退出码: {:?}", status.code()))
     }
+}
+
+/// `mise <args>`, streaming stdout+stderr to env-setup-log. mise's node
+/// download can take minutes; without streaming the user sees no output.
+fn stream_mise(app: &AppHandle, args: &[&str], path_env: &str) -> Result<(), String> {
+    let child = Command::new("mise")
+        .args(args)
+        .env("PATH", path_env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("mise 启动失败: {e}"))?;
+    stream_child(app, child, &format!("mise {}", args.join(" ")))
 }
 
 /// `brew install node`, streaming output to env-setup-log.
@@ -502,28 +452,20 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
         if !node_version_ok {
             emit(EnvSetupProgress::InstallingNode);
             if find_in(&candidate_paths(), "mise").is_some() {
-                let out = Command::new("mise")
-                    .args(["install", "node@24"])
-                    .env("PATH", &path_env)
-                    .output()
-                    .map_err(|e| format!("mise 失败: {e}"))?;
-                if !out.status.success() {
-                    return Err(format!(
-                        "mise install 失败: {}",
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    ));
-                }
-                let out = Command::new("mise")
-                    .args(["use", "-g", "node@24"])
-                    .env("PATH", &path_env)
-                    .output()
-                    .map_err(|e| format!("mise 失败: {e}"))?;
-                if !out.status.success() {
-                    return Err(format!(
-                        "mise use 失败: {}",
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    ));
-                }
+                stream_mise(&app, &["install", "node@24"], &path_env).map_err(|e| {
+                    let _ = app.emit(
+                        "env-setup-progress",
+                        EnvSetupProgress::Error(format!("node 安装失败: {e}")),
+                    );
+                    format!("node 安装失败: {e}")
+                })?;
+                stream_mise(&app, &["use", "-g", "node@24"], &path_env).map_err(|e| {
+                    let _ = app.emit(
+                        "env-setup-progress",
+                        EnvSetupProgress::Error(format!("node 安装失败: {e}")),
+                    );
+                    format!("node 安装失败: {e}")
+                })?;
             } else if find_in(&candidate_paths(), "brew").is_some() {
                 if let Err(e) = stream_brew_install(&app, &path_env) {
                     let _ = app.emit(
@@ -543,7 +485,7 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
             }
         }
 
-        // 4. pnpm (corepack → npm fallback, each step file-verified).
+        // 3. pnpm (corepack → npm fallback, each step file-verified).
         if find_in(&candidate_paths(), "pnpm").is_none() {
             eprintln!("[env] pnpm missing, installing…");
             emit(EnvSetupProgress::InstallingPnpm);
@@ -556,7 +498,7 @@ pub async fn env_setup_auto(app: tauri::AppHandle) -> Result<EnvStatus, String> 
             }
         }
 
-        // 5. Final verification.
+        // 4. Final verification.
         emit(EnvSetupProgress::Verifying);
         let status = check_env();
         if status.ready {
