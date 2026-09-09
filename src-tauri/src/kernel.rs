@@ -183,11 +183,13 @@ pub fn git_revision(dir: &Path) -> (Option<String>, bool) {
         None
     };
     let short = sha.map(|s| s.chars().take(7).collect());
-    // Dirty = any tracked file differs from HEAD.
+    // Dirty = any tracked file differs from HEAD. Untracked files are
+    // excluded: the kernel leaves `_tmp_*` transient artifacts behind when
+    // its own cleanup is interrupted, and those must not block updates.
     let dirty = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
         .map(|o| o.status.success() && !o.stdout.is_empty())
         .unwrap_or(false);

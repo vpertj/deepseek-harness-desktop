@@ -204,7 +204,27 @@ pub async fn apply_update(
     let (pnpm, path_env) = resolve_toolchain().await?;
     let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 开始更新内核 ==" }));
 
-    // 1. Pull (ff-only is safe: dirty check above guarantees a clean tree).
+    // 1. Pull (ff-only; the dirty check above guarantees no *tracked* file
+    //    differs from HEAD). First sweep the kernel's transient `_tmp_*`
+    //    artifacts — they are untracked leftovers from interrupted cleanups
+    //    and would otherwise accumulate forever.
+    let mut swept = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("_tmp_") {
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    swept += 1;
+                }
+            }
+        }
+    }
+    if swept > 0 {
+        let _ = app.emit(
+            "kernel-log",
+            serde_json::json!({ "stream": "out", "line": format!("== 清理 {} 个内核临时残留文件 ==", swept) }),
+        );
+    }
     let branch = git(&dir, &["symbolic-ref", "--short", "HEAD"])
         .await
         .unwrap_or_else(|_| "master".into());
