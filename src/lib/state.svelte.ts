@@ -189,6 +189,25 @@ export async function installKernel(): Promise<string | null> {
 
 // ---- Event wiring ---------------------------------------------------------
 
+// If the running event arrives without a token (the token parse can lag the
+// port probe), poll kernel_status briefly until the token lands so the
+// iframe URL switches to the authenticated one and the 401 page goes away.
+let tokenPollTimer: ReturnType<typeof setTimeout> | null = null;
+function pollForToken() {
+  if (tokenPollTimer !== null) return;
+  let tries = 0;
+  const tick = async () => {
+    tries++;
+    await refreshStatus();
+    if (store.kernel.token !== null || store.kernel.status.state !== "running" || tries >= 20) {
+      tokenPollTimer = null;
+      return;
+    }
+    tokenPollTimer = setTimeout(tick, 500);
+  };
+  tokenPollTimer = setTimeout(tick, 500);
+}
+
 let unlistenFns: UnlistenFn[] = [];
 let wired = false;
 
@@ -200,7 +219,11 @@ export async function wireEvents() {
       const payload = e.payload as Record<string, unknown>;
       if (payload.state === "running") {
         store.kernel.status = { state: "running", port: Number(payload.port) };
-        if (typeof payload.token === "string") store.kernel.token = payload.token;
+        if (typeof payload.token === "string") {
+          store.kernel.token = payload.token;
+        } else if (store.kernel.token === null) {
+          pollForToken();
+        }
       } else if (payload.state === "error") {
         store.kernel.status = { state: "error", message: String(payload.message ?? "") };
       } else if (payload.state === "stopped") {

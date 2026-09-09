@@ -418,6 +418,21 @@ impl KernelManager {
                             .collect();
                         if !tok.is_empty() {
                             token_shared.lock().await.token = Some(tok);
+                            // If the supervisor already flipped to running
+                            // (the probe won the race), re-emit so the
+                            // frontend reloads the iframe with the token.
+                            let (status, token_now) = {
+                                let guard = token_shared.lock().await;
+                                (guard.status.clone(), guard.token.clone())
+                            };
+                            if let KernelStatus::Running { port } = status {
+                                let _ = app_log.emit(
+                                    "kernel-status",
+                                    serde_json::json!(
+                                        { "state": "running", "port": port, "token": token_now }
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -449,7 +464,24 @@ impl KernelManager {
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
             if healthy {
-                let token = sup_shared.lock().await.token.clone();
+                // The auth token is parsed from the kernel's ready line by the
+                // stdout reader task, but tcp_probe can succeed slightly before
+                // that line has travelled the pnpm pipe. Emitting `running`
+                // with a null token makes the iframe load tokenless and stick
+                // on the kernel's 401 page, so wait (bounded) for the reader
+                // to catch up first.
+                let token = {
+                    let mut tok = sup_shared.lock().await.token.clone();
+                    if tok.is_none() {
+                        let tok_deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(8);
+                        while tok.is_none() && std::time::Instant::now() < tok_deadline {
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            tok = sup_shared.lock().await.token.clone();
+                        }
+                    }
+                    tok
+                };
                 sup_shared.lock().await.status = KernelStatus::Running { port };
                 // Point the shell proxy at this kernel and make sure the
                 // proxy listener is up (the iframe loads the proxy port).
