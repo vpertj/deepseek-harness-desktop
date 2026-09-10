@@ -272,6 +272,15 @@ fn apply_headers<B>(
 /// Forward a WebSocket upgrade to the kernel over raw TCP and pump frames in
 /// both directions. tiny_http's `upgrade` hands back the client's raw stream;
 /// the kernel side is a plain TcpStream.
+///
+/// Every kernel→client write must be flushed immediately: tiny_http's upgraded
+/// writer is a 1024-byte `BufWriter` (`tiny_http::client` builds it with
+/// `with_capacity(1024, ..)`), and `std::io::copy` never flushes it. The
+/// kernel's mux socket sends a 4-byte WebSocket ping every 2 s and terminates
+/// the connection after 2 missed heartbeats (`MAX_MISSED_HEARTBEATS` in the
+/// gateway's `stream-server.ts`). With a non-flushing copy those pings stay
+/// buffered, the kernel kills the socket roughly every 5 s, and the embedded UI
+/// loops on "自动重连中" → "连接成功".
 fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> {
     use std::io::{Read, Write};
 
@@ -370,22 +379,56 @@ fn handle_upgrade(request: tiny_http::Request, port: u16) -> Result<(), String> 
 
     let mut kernel_read = kernel.try_clone().map_err(|e| e.to_string())?;
     let mut kernel_write = kernel;
+    // Our own writes towards the kernel (mux requests, WebSocket pongs) are
+    // small control frames; Nagle would hold them behind an unacknowledged
+    // segment and make the pong miss the kernel's 2 s heartbeat window.
+    let _ = kernel_write.set_nodelay(true);
+    let _ = kernel_read.set_nodelay(true);
 
     let h1 = std::thread::spawn(move || {
+        // kernel → client. `to_client` is tiny_http's BufWriter-backed upgrade
+        // writer, so each frame must be flushed to survive the heartbeat.
         let mut client = to_client;
-        let _ = std::io::copy(&mut kernel_read, &mut client);
-        let _ = client.flush();
+        pump(&mut kernel_read, &mut client, true);
     });
     let h2 = std::thread::spawn(move || {
+        // client → kernel. Both ends are unbuffered, so no per-write flush is
+        // needed; the trailing flush in `pump` is a cheap no-op.
         let mut client = to_kernel;
-        let _ = std::io::copy(&mut client, &mut kernel_write);
-        let _ = kernel_write.flush();
+        pump(&mut client, &mut kernel_write, false);
     });
     let _ = (h1.join(), h2.join());
     unsafe {
         drop(Box::from_raw(raw));
     }
     Ok(())
+}
+
+/// Copy one direction of an upgraded connection until either side closes.
+///
+/// `flush_each` must be `true` whenever the destination is tiny_http's upgraded
+/// writer. That writer buffers 1024 bytes and nothing flushes it while the
+/// connection is live, so small frames (a WebSocket ping is 4 bytes) would
+/// never leave the process. Flushing after every read keeps a peer's heartbeat
+/// satisfied and makes streamed fragments visible without waiting for the
+/// buffer to fill.
+fn pump<R: std::io::Read, W: std::io::Write>(from: &mut R, to: &mut W, flush_each: bool) {
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        let read = match from.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        if to.write_all(&buf[..read]).is_err() {
+            break;
+        }
+        if flush_each && to.flush().is_err() {
+            break;
+        }
+    }
+    let _ = to.flush();
 }
 
 /// Serve `host.pickDirectory` with the app's native folder picker, answering
@@ -443,4 +486,104 @@ fn handle_pick_directory(mut request: tiny_http::Request, app: &AppHandle) -> Re
         .with_status_code(200)
         .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
     request.respond(response).map_err(|e| format!("响应失败: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pump;
+    use std::io::{BufWriter, Read, Write};
+    use std::sync::mpsc::{channel, Receiver};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// Sink the test can inspect while the pump is still running.
+    #[derive(Clone, Default)]
+    struct SharedSink(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedSink {
+        fn bytes(&self) -> Vec<u8> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    impl Write for SharedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A peer that releases one chunk per `send` and then blocks, so the test
+    /// can observe delivery *before* the stream ends.
+    struct ChannelReader(Receiver<Vec<u8>>);
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.recv() {
+                Ok(chunk) => {
+                    let n = chunk.len().min(buf.len());
+                    buf[..n].copy_from_slice(&chunk[..n]);
+                    Ok(n)
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+
+    fn wait_for_bytes(sink: &SharedSink, want: usize) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if sink.bytes().len() >= want {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// A 4-byte WebSocket ping written into tiny_http's 1024-byte upgrade
+    /// writer must reach the client while the connection is still open.
+    /// Regression guard: `std::io::copy` leaves it buffered, so the kernel
+    /// records a missed heartbeat, terminates the mux socket, and the UI loops
+    /// on "自动重连中" / "连接成功".
+    #[test]
+    fn pump_flushes_small_frames_before_the_stream_ends() {
+        let (tx, rx) = channel();
+        let sink = SharedSink::default();
+        let writer = BufWriter::with_capacity(1024, sink.clone());
+        let worker = std::thread::spawn(move || {
+            let mut source = ChannelReader(rx);
+            let mut writer = writer;
+            pump(&mut source, &mut writer, true);
+        });
+
+        tx.send(vec![0x89, 0x00, 0x00, 0x00]).unwrap(); // one ping frame
+        assert!(
+            wait_for_bytes(&sink, 4),
+            "small frame stayed buffered while the connection was open"
+        );
+        assert_eq!(sink.bytes(), vec![0x89, 0x00, 0x00, 0x00]);
+
+        drop(tx); // EOF ends the pump
+        worker.join().unwrap();
+    }
+
+    /// `flush_each = false` is the client→kernel direction: the data must still
+    /// arrive, and the pump must terminate on EOF.
+    #[test]
+    fn pump_forwards_without_per_write_flush() {
+        let (tx, rx) = channel();
+        let sink = SharedSink::default();
+        let mut writer = BufWriter::with_capacity(1024, sink.clone());
+        let mut source = ChannelReader(rx);
+
+        tx.send(vec![1, 2, 3, 4, 5]).unwrap();
+        drop(tx);
+        pump(&mut source, &mut writer, false);
+
+        assert_eq!(sink.bytes(), vec![1, 2, 3, 4, 5]);
+    }
 }
