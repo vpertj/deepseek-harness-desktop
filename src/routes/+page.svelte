@@ -86,7 +86,9 @@
       case "error":
         return "内核启动失败，请查看日志";
       default:
-        return s.store.logs.length > 0 ? "正在启动…" : "准备启动…";
+        // Stopped with logs means the kernel ran and then exited (or the user
+        // stopped it) — "正在启动…" would be misleading; it is not starting.
+        return s.store.logs.length > 0 ? "内核未运行" : "准备启动…";
     }
   });
 
