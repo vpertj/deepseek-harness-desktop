@@ -245,10 +245,8 @@ pub async fn apply_update(
     let needs_rebuild = needs_build(&dir);
     if needs_rebuild {
         let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，执行重建 ==" }));
-        let lib_host_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:host"]).await;
-        let lib_client_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:lib:client"]).await;
-        let web_r = run_streaming(app, &dir, &path_env, &pnpm, &["run", "build:web"]).await;
-        if lib_host_r.is_err() || lib_client_r.is_err() || web_r.is_err() {
+        let build_ok = run_kernel_build(app, &dir, &path_env, &pnpm).await;
+        if !build_ok {
             // Rebuild failed — check whether the dist is still usable. If it is,
             // carry on so the git pull itself counts as a successful update.
             let still_valid = !needs_build(&dir);
@@ -334,12 +332,15 @@ pub async fn install_kernel(
             eprintln!("[updater] adopting existing checkout, needs_build = {needs}");
             if needs {
                 let (pnpm, path_env) = resolve_toolchain().await?;
-                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 lib:host ==" }));
-                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:host"]).await?;
-                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 lib:client ==" }));
-                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:lib:client"]).await?;
-                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，重建 web  ==" }));
-                run_streaming(app, &target_dir, &path_env, &pnpm, &["run", "build:web"]).await?;
+                let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 检测到构建产物缺失，执行重建 ==" }));
+                let build_ok = run_kernel_build(app, &target_dir, &path_env, &pnpm).await;
+                if !build_ok {
+                    let still_valid = !needs_build(&target_dir);
+                    if !still_valid {
+                        return Err("内核源码已就绪但构建失败（上游 build 报错）。请等待上游修复后重试，或在终端手动运行 `pnpm run build`。".to_string());
+                    }
+                    let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": "== 构建有报错，但现有产物仍可用，继续 ==" }));
+                }
             }
             manager.set_kernel_dir(target_dir).await?;
             return Ok(());
@@ -408,17 +409,186 @@ pub async fn install_kernel(
 /// two-file check happy while the kernel dies at launch with
 /// "client bundles not found; run `pnpm run build`". Check a spread of
 /// client bundles instead, matching the packages the loader composes.
+/// Kernel build steps, in order, as (pnpm script, log banner).
+///
+/// `build:native-system` is first and easy to forget: it compiles the host
+/// Node-API addon (flock) that session resume depends on. Shipping without it
+/// left model switching broken with "Cannot find module .../system.node".
+const KERNEL_BUILD_STEPS: &[(&str, &str)] = &[
+    ("build:native-system", "== 构建原生插件（flock）=="),
+    ("build:lib:host", "== 构建 host 库 =="),
+    ("build:lib:client", "== 构建 client 库 =="),
+    ("build:web", "== 构建 web 前端 =="),
+];
+
+/// Run every kernel build step, streaming output. Returns false when at least
+/// one step failed (callers decide whether the existing artifacts still work).
+async fn run_kernel_build(app: &AppHandle, dir: &Path, path_env: &str, pnpm: &str) -> bool {
+    let mut all_ok = true;
+    for (script, banner) in KERNEL_BUILD_STEPS {
+        let _ = app.emit("kernel-log", serde_json::json!({ "stream": "out", "line": banner }));
+        if run_streaming(app, dir, path_env, pnpm, &["run", script]).await.is_err() {
+            all_ok = false;
+        }
+    }
+    all_ok
+}
+
+/// Self-heal entry point used by kernel start: rebuild the tree when any build
+/// artifact is missing (an interrupted update, a manual `git pull`, or an
+/// upstream package added after the last build). Without this the kernel dies
+/// at boot with "client bundles not found" or "Cannot find module system.node".
+pub(crate) async fn ensure_kernel_built(app: &AppHandle, dir: &Path) -> Result<(), String> {
+    if !needs_build(dir) {
+        return Ok(());
+    }
+    let (pnpm, path_env) = resolve_toolchain().await?;
+    let _ = app.emit(
+        "kernel-log",
+        serde_json::json!({ "stream": "out", "line": "== 检测到内核构建产物缺失，开始自动重建（首次可能需要几分钟）==" }),
+    );
+    let build_ok = run_kernel_build(app, dir, &path_env, &pnpm).await;
+    if needs_build(dir) {
+        let detail = if build_ok { "仍有产物缺失" } else { "构建过程报错" };
+        return Err(format!(
+            "内核构建产物不完整（{detail}）。请检查运行日志；若上游 build 报错，可等待上游修复后重试。"
+        ));
+    }
+    let _ = app.emit(
+        "kernel-log",
+        serde_json::json!({ "stream": "out", "line": "== 内核构建完成，继续启动 ==" }),
+    );
+    Ok(())
+}
+
+/// Exposed to kernel start so it can decide whether to self-heal the tree.
+pub(crate) fn needs_build_public(dir: &Path) -> bool {
+    needs_build(dir)
+}
+
 fn needs_build(dir: &Path) -> bool {
-    const REQUIRED: &[&str] = &[
-        "packages/typert/registry/lib/client.js",
-        "apps/web/dist/index.html",
-        "packages/client/ui-open-in-app/lib/client.js",
-        "packages/client/ui-sidebar-files/lib/client.js",
-        "packages/client/ui-sidebar-right/lib/client.js",
-        "packages/client/resources/lib/client.js",
-        "packages/api/workspace-files/lib/client.js",
-    ];
-    REQUIRED.iter().any(|f| !dir.join(f).is_file())
+    if !dir.join("apps/web/dist/index.html").is_file() {
+        return true;
+    }
+    // Client packages are discovered, not hardcoded: upstream adds them
+    // regularly (the 2026-09 update introduced ui-sidebar-documentpreview and
+    // the old hardcoded list happily skipped the rebuild, leaving the kernel
+    // unable to boot with "client bundles not found"). A package needs its
+    // compiled `lib/client.js` when it opts into the client face, which it
+    // declares either as `dsh.client` in package.json or as an
+    // `exports["./client"]` entry pointing at lib/client.js.
+    package_tree_needs_client_build(&dir.join("packages")) || package_tree_needs_client_build(&dir.join("apps"))
+        || native_binaries_missing(dir)
+}
+
+/// Host directory name used by `native/system/packages/<platform>-<arch>`.
+fn native_host_pkg() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("linux", "x86_64") => "linux-x64",
+        _ => return None,
+    })
+}
+
+/// True when a native system binary the host manifest declares is missing.
+/// The flock Node-API addon (`bin/system.node`) backs session file locking:
+/// without it every session resume — and therefore every model switch —
+/// fails with "Cannot find module .../system.node".
+fn native_binaries_missing(dir: &Path) -> bool {
+    let Some(host) = native_host_pkg() else {
+        return false;
+    };
+    let pkg = dir.join("native/system/packages").join(host);
+    let Ok(raw) = std::fs::read_to_string(pkg.join("prebuilds.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(binaries) = v.get("binaries").and_then(|b| b.as_array()) else {
+        return false;
+    };
+    for binary in binaries {
+        // Skip variants built for a libc this host is not running.
+        if let Some(libc) = binary.get("libc").and_then(|l| l.as_str()) {
+            let host_libc = if cfg!(target_env = "musl") { "musl" } else { "glibc" };
+            if libc != host_libc {
+                continue;
+            }
+        }
+        let Some(path) = binary.get("path").and_then(|p| p.as_str()) else {
+            continue;
+        };
+        if !pkg.join(path).is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Walk a package tree and report whether any client package lacks its bundle.
+fn package_tree_needs_client_build(root: &Path) -> bool {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                "node_modules" | ".git" | "lib" | "dist" | "tests" | "test" | "coverage"
+            ) {
+                continue;
+            }
+            let path = entry.path();
+            let pkg_json = path.join("package.json");
+            if pkg_json.is_file()
+                && declares_client_face(&pkg_json)
+                && !path.join("lib/client.js").is_file()
+            {
+                return true;
+            }
+            stack.push(path);
+        }
+    }
+    false
+}
+
+/// True when package.json opts into the kernel's client face, i.e. the package
+/// is expected to ship a compiled `lib/client.js`.
+fn declares_client_face(pkg_json: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(pkg_json) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    if v.get("dsh").and_then(|d| d.get("client")).is_some() {
+        return true;
+    }
+    fn points_at_client_bundle(entry: &serde_json::Value) -> bool {
+        if let Some(s) = entry.as_str() {
+            return s.ends_with("lib/client.js");
+        }
+        entry
+            .as_object()
+            .map(|o| o.values().any(points_at_client_bundle))
+            .unwrap_or(false)
+    }
+    v.get("exports")
+        .and_then(|e| e.get("./client"))
+        .map(points_at_client_bundle)
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -463,33 +633,80 @@ mod tests {
     fn needs_build_detects_missing_artifacts() {
         let tmp = std::env::temp_dir().join(format!("dsh-needs-build-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(tmp.join("packages/typert/registry/lib")).unwrap();
         std::fs::create_dir_all(tmp.join("apps/web/dist")).unwrap();
+
+        // A client package (dsh.client face) that has not been compiled yet.
+        let ui = tmp.join("packages/client/ui-demo");
+        std::fs::create_dir_all(&ui).unwrap();
+        std::fs::write(
+            ui.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh-client-ui-demo","dsh":{"client":{"platform":"web"}}}"#,
+        )
+        .unwrap();
 
         // Nothing built -> needs build.
         assert!(needs_build(&tmp));
 
-        // Only web dist -> still needs lib bundles.
+        // Web dist present but the client bundle still missing -> needs build.
         std::fs::write(tmp.join("apps/web/dist/index.html"), "<html></html>").unwrap();
         assert!(needs_build(&tmp));
 
-        // All required artifacts present -> no rebuild needed.
-        for f in [
-            "packages/typert/registry/lib/client.js",
-            "packages/client/ui-open-in-app/lib/client.js",
-            "packages/client/ui-sidebar-files/lib/client.js",
-            "packages/client/ui-sidebar-right/lib/client.js",
-            "packages/client/resources/lib/client.js",
-            "packages/api/workspace-files/lib/client.js",
-        ] {
-            let p = tmp.join(f);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, "// stub").unwrap();
-        }
+        // Compiled -> no rebuild needed.
+        std::fs::create_dir_all(ui.join("lib")).unwrap();
+        std::fs::write(ui.join("lib/client.js"), "// stub").unwrap();
         assert!(!needs_build(&tmp));
 
-        // A partial build (one client bundle missing) -> needs build again.
-        std::fs::remove_file(tmp.join("packages/client/ui-sidebar-files/lib/client.js")).unwrap();
+        // Non-client packages are ignored (no client face, no bundle).
+        let core = tmp.join("packages/core/util");
+        std::fs::create_dir_all(&core).unwrap();
+        std::fs::write(core.join("package.json"), r#"{"name":"@deepseek-ai/dsh-core-util"}"#).unwrap();
+        assert!(!needs_build(&tmp));
+
+        // Exports-style client declaration is detected as well (this is how
+        // packages/experimental/webworker-runtime declares its bundle).
+        let widget = tmp.join("packages/api/widgets");
+        std::fs::create_dir_all(&widget).unwrap();
+        std::fs::write(
+            widget.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh-api-widgets","exports":{"./client":{"types":"./lib/types/client/index.d.ts","default":"./lib/client.js"}}}"#,
+        )
+        .unwrap();
         assert!(needs_build(&tmp));
+
+        // Exactly the upstream case: a *new* client package appears after an
+        // update while every previously known bundle is already built.
+        std::fs::create_dir_all(ui.join("lib")).unwrap();
+        assert!(needs_build(&tmp));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn needs_build_detects_missing_native_addon() {
+        let Some(host) = native_host_pkg() else {
+            return; // unsupported host: nothing to assert
+        };
+        let tmp = std::env::temp_dir().join(format!("dsh-needs-native-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("native/system/packages").join(host);
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("prebuilds.json"),
+            r#"{"platform":"host","binaries":[{"tool":"flock","kind":"node-api","napi":8,"path":"bin/system.node"}]}"#,
+        )
+        .unwrap();
+        // Web and client artifacts are complete for this scenario.
+        std::fs::create_dir_all(tmp.join("apps/web/dist")).unwrap();
+        std::fs::write(tmp.join("apps/web/dist/index.html"), "<html></html>").unwrap();
+
+        // flock addon missing -> rebuild required (this is what broke model
+        // switching after the 2026-09 kernel update).
+        assert!(needs_build(&tmp));
+
+        std::fs::create_dir_all(pkg.join("bin")).unwrap();
+        std::fs::write(pkg.join("bin/system.node"), "stub").unwrap();
+        assert!(!needs_build(&tmp));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

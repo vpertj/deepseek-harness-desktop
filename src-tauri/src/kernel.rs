@@ -377,6 +377,20 @@ impl KernelManager {
         }
         let port = find_free_port()?;
 
+        // Self-heal a tree whose build artifacts are missing before spawning:
+        // an interrupted update, a manual pull, or a new upstream package all
+        // leave the kernel unable to boot ("client bundles not found",
+        // "Cannot find module system.node"). Rebuilding here keeps 启动 working
+        // instead of failing after the 90s readiness timeout.
+        if crate::updater::needs_build_public(&dir) {
+            if let Err(e) = crate::updater::ensure_kernel_built(app, &dir).await {
+                let _ = app.emit(
+                    "kernel-log",
+                    serde_json::json!({ "stream": "err", "line": format!("== 自动重建未完成：{e} ==") }),
+                );
+            }
+        }
+
         inner.status = KernelStatus::Starting;
         inner.child = None;
         inner.token = None;
